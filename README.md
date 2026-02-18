@@ -14,7 +14,13 @@ SQLite + sqlite-vec + FTS5 backend. Works with any MCP client.
 ## Install
 
 ```bash
-uv sync
+uv tool install rememble
+```
+
+Upgrade:
+
+```bash
+uv tool upgrade rememble
 ```
 
 ## MCP Client Setup
@@ -25,8 +31,7 @@ uv sync
 {
   "mcpServers": {
     "rememble": {
-      "command": "uv",
-      "args": ["run", "--directory", "/path/to/Rememble", "rememble"]
+      "command": "rememble"
     }
   }
 }
