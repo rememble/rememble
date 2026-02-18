@@ -2,6 +2,9 @@
 name = "rememble"
 version = "0.1.0"
 description = "Local MCP memory server with hybrid search, knowledge graph, and RAG"
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Nik Cubrilovic", email = "git@nikcub.me" }]
 requires-python = ">=3.11"
 dependencies = [
     "fastmcp>=2.0",
@@ -15,7 +18,6 @@ dependencies = [
 local = ["sentence-transformers>=3.0", "onnxruntime>=1.19"]
 cohere = ["cohere>=5.0"]
 all = ["rememble[local,cohere]"]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "ruff>=0.8", "basedpyright>=1.20"]
 
 [project.scripts]
 rememble = "rememble.server:main"
@@ -27,7 +29,16 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/rememble"]
 
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "basedpyright>=1.20",
+    "ruff>=0.8",
+]
+
 [tool.ruff]
+target-version = "py311"
 line-length = 100
 src = ["src"]
 
@@ -37,6 +48,7 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 [tool.basedpyright]
 pythonVersion = "3.11"
 typeCheckingMode = "standard"
+reportCallIssue = "warning"
 venvPath = "."
 venv = ".venv"
 
