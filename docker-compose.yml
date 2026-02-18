@@ -1,0 +1,6 @@
+services:
+  rememble:
+    build: .
+    stdin_open: true
+    volumes:
+      - ~/.rememble:/data
