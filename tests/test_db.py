@@ -76,6 +76,7 @@ def test_memoryStats(db: sqlite3.Connection):
 
 # -- Knowledge Graph --
 
+
 def test_entityCRUD(db: sqlite3.Connection):
     eid = upsertEntity(db, "Python", "language")
     assert eid > 0

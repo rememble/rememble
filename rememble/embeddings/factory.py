@@ -16,8 +16,8 @@ async def createProvider(config: EmbeddingConfig) -> EmbeddingProvider:
 
     if provider == "ollama":
         return await _tryOllama(config)
-    elif provider == "cohere":
-        return _createCohere(config)
+    elif provider == "compat":
+        return _createCompat(config)
     elif provider == "local":
         return _createLocal(config)
     else:
@@ -37,15 +37,17 @@ async def _tryOllama(config: EmbeddingConfig) -> EmbeddingProvider:
     )
 
 
-def _createCohere(config: EmbeddingConfig) -> EmbeddingProvider:
-    from rememble.embeddings.cohere import CohereProvider
+def _createCompat(config: EmbeddingConfig) -> EmbeddingProvider:
+    from rememble.embeddings.compat import CompatProvider
 
-    p = CohereProvider(
-        model=config.cohere_model,
-        api_key=config.cohere_api_key,
+    p = CompatProvider(
+        model=config.model,
+        api_key=config.api_key,
         dimensions=config.dimensions,
+        url=config.api_endpoint,
+        api_type=config.api_type,
     )
-    logger.info("Using Cohere provider: %s", p.name)
+    logger.info("Using compat provider (%s): %s", config.api_type, p.name)
     return p  # type: ignore[return-value]
 
 

@@ -9,7 +9,7 @@ import pytest
 
 from rememble.config import EmbeddingConfig
 from rememble.embeddings.base import EmbeddingProvider
-from rememble.embeddings.cohere import CohereProvider
+from rememble.embeddings.compat import CompatProvider
 from rememble.embeddings.ollama import OllamaProvider
 
 # -- Protocol conformance --
@@ -23,8 +23,8 @@ class TestEmbeddingProtocol:
         p = OllamaProvider()
         assert isinstance(p, EmbeddingProvider)
 
-    def test_cohereConforms(self):
-        p = CohereProvider(api_key="test-key")
+    def test_compatConforms(self):
+        p = CompatProvider(model="test-model", api_key="test-key")
         assert isinstance(p, EmbeddingProvider)
 
 
@@ -84,44 +84,56 @@ class TestOllamaProvider:
         assert await p.healthCheck() is False
 
 
-# -- CohereProvider --
+# -- CompatProvider --
 
 
-class TestCohereProvider:
+class TestCompatProvider:
     def test_properties(self):
-        p = CohereProvider(model="embed-v4.0", api_key="key", dimensions=1024)
-        assert p.name == "cohere/embed-v4.0"
-        assert p.dimensions == 1024
+        p = CompatProvider(
+            model="embed-english-light-v3.0", api_key="key", dimensions=384, api_type="cohere"
+        )
+        assert p.name == "cohere/embed-english-light-v3.0"
+        assert p.dimensions == 384
 
     def test_requiresApiKey(self):
         with (
             patch.dict("os.environ", {}, clear=True),
             pytest.raises(ValueError, match="API key required"),
         ):
-            CohereProvider(api_key=None)
-
-    def test_forQuerySwitchesInputType(self):
-        p = CohereProvider(api_key="key")
-        assert p._input_type == "search_document"
-        q = p.forQuery()
-        assert q._input_type == "search_query"
-        # Original unchanged
-        assert p._input_type == "search_document"
+            CompatProvider(model="test-model", api_key=None)
 
     @pytest.mark.asyncio
     async def test_embed(self):
-        p = CohereProvider(api_key="key", model="embed-v4.0")
+        p = CompatProvider(model="text-embedding-3-small", api_key="key", dimensions=1536)
         mock_resp = MagicMock()
-        mock_resp.json.return_value = {"embeddings": {"float": [[0.1, 0.2]]}}
+        mock_resp.json.return_value = {"data": [{"embedding": [0.1, 0.2], "index": 0}]}
         mock_resp.raise_for_status = MagicMock()
         p._client = AsyncMock()
         p._client.post = AsyncMock(return_value=mock_resp)
 
         result = await p.embed(["hello"])
         assert result == [[0.1, 0.2]]
-        call_json = p._client.post.call_args[1]["json"]
-        assert call_json["input_type"] == "search_document"
-        assert call_json["model"] == "embed-v4.0"
+        p._client.post.assert_called_once_with(
+            "/embeddings", json={"model": "text-embedding-3-small", "input": ["hello"]}
+        )
+
+    @pytest.mark.asyncio
+    async def test_embedOrderPreserved(self):
+        p = CompatProvider(model="test-model", api_key="key")
+        mock_resp = MagicMock()
+        # Return out-of-order indexes
+        mock_resp.json.return_value = {
+            "data": [
+                {"embedding": [0.3, 0.4], "index": 1},
+                {"embedding": [0.1, 0.2], "index": 0},
+            ]
+        }
+        mock_resp.raise_for_status = MagicMock()
+        p._client = AsyncMock()
+        p._client.post = AsyncMock(return_value=mock_resp)
+
+        result = await p.embed(["first", "second"])
+        assert result == [[0.1, 0.2], [0.3, 0.4]]
 
 
 # -- Factory --
@@ -143,6 +155,17 @@ class TestFactory:
     async def test_createLocalProvider(self):
         config = EmbeddingConfig(provider="local")
         with patch("rememble.embeddings.factory._createLocal") as mock:
+            mock.return_value = MagicMock(spec=EmbeddingProvider)
+            from rememble.embeddings.factory import createProvider
+
+            result = await createProvider(config)
+            mock.assert_called_once_with(config)
+            assert result is mock.return_value
+
+    @pytest.mark.asyncio
+    async def test_createCompatProvider(self):
+        config = EmbeddingConfig(provider="compat", api_key="test-key")
+        with patch("rememble.embeddings.factory._createCompat") as mock:
             mock.return_value = MagicMock(spec=EmbeddingProvider)
             from rememble.embeddings.factory import createProvider
 

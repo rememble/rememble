@@ -5,15 +5,13 @@ from __future__ import annotations
 import sqlite3
 import time
 
-import pytest
-
 from rememble.config import SearchConfig
 from rememble.db import addObservation, addRelation, insertMemory, upsertEntity
+from rememble.search.fusion import hybridSearch
 from rememble.search.graph import graphSearch
 from rememble.search.temporal import temporalScore
 from rememble.search.text import textSearch
 from rememble.search.vector import vectorSearch
-from rememble.search.fusion import hybridSearch
 
 
 def _insertWithEmbedding(db, content, embedding, source=None, tags=None):
@@ -56,7 +54,6 @@ class TestTextSearch:
 class TestTemporalScore:
     def test_newHigherThanOld(self):
         now = int(time.time() * 1000)
-        hour_ago = now - 3_600_000
         week_ago = now - 7 * 24 * 3_600_000
 
         new_score = temporalScore(now, now, 0)

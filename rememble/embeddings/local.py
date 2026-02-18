@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import logging
+from typing import Literal, TypeAlias
 
 logger = logging.getLogger(__name__)
+
+STBackend: TypeAlias = Literal["torch", "onnx", "openvino"]
 
 
 class LocalProvider:
@@ -13,10 +16,10 @@ class LocalProvider:
     def __init__(
         self,
         model: str = "sentence-transformers/all-MiniLM-L6-v2",
-        backend: str = "onnx",
+        backend: STBackend = "onnx",
     ):
         self._model_name = model
-        self._backend = backend
+        self._backend: STBackend = backend
         self._model = None
         self._dims: int | None = None
 
