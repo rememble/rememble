@@ -10,12 +10,12 @@ test: ## Run tests
 	uv run pytest -v
 
 lint: ## Lint + type check
-	uv run ruff check src/ tests/
-	uv run basedpyright src/
+	uv run ruff check rememble/ tests/
+	uv run basedpyright rememble/
 
 fmt: ## Format + fix imports
-	uv run ruff format src/ tests/
-	uv run ruff check --fix src/ tests/
+	uv run ruff format rememble/ tests/
+	uv run ruff check --fix rememble/ tests/
 
 check: fmt lint test ## Format, lint, type check, test
 

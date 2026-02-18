@@ -38,7 +38,7 @@ class LocalProvider:
         if self._model is not None:
             return
         try:
-            from sentence_transformers import SentenceTransformer
+            from sentence_transformers import SentenceTransformer  # type: ignore[import-untyped]
         except ImportError as e:
             raise ImportError(
                 "sentence-transformers not installed. "
