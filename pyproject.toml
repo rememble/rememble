@@ -16,6 +16,8 @@ dependencies = [
     "questionary>=2.0",
     "typer>=0.12",
     "rich>=13.0",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
 ]
 
 [project.optional-dependencies]
