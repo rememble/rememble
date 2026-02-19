@@ -324,7 +324,7 @@ def _renderConfigSection(title: str, pairs: list[tuple[str, Any, Any]]) -> None:
 _cli = typer.Typer(
     name="rememble",
     help="Local MCP memory server with hybrid search and knowledge graph.",
-    no_args_is_help=False,
+    no_args_is_help=True,
     rich_markup_mode="rich",
 )
 _config_cli = typer.Typer(help="Read/write [bold]~/.rememble/config.json[/bold].")
@@ -347,10 +347,8 @@ def _getClient():
 
 @_cli.callback(invoke_without_command=True)
 def _default(ctx: typer.Context) -> None:
-    """Start the MCP server (default when no subcommand given)."""
-    if ctx.invoked_subcommand is None:
-        logging.basicConfig(level=logging.INFO, format="%(name)s | %(message)s")
-        mcp.run(transport="stdio")
+    """Local MCP memory server with hybrid search and knowledge graph."""
+    pass
 
 
 # ── serve / stop / status ────────────────────────────────────
