@@ -1,6 +1,7 @@
 services:
   rememble:
     build: .
-    stdin_open: true
+    ports:
+      - "7707:7707"
     volumes:
       - ~/.rememble:/data
