@@ -28,7 +28,7 @@ You have persistent memory via MCP tools. Use proactively.
 Tag with project/topic (`source="project:myapp"`) for easy filtering.
 """
 
-_MCP_ENTRY: dict = {"command": "rememble"}
+_MCP_ENTRY: dict = {"command": "rememble", "args": ["serve", "--mcp"]}
 
 # (label, api_url, needs_key, [(model_name, dimensions)])
 _PROVIDER_SLUGS: dict[str, int] = {
@@ -344,7 +344,10 @@ def _setupClaudeCode() -> str:
         return "skip"
     try:
         result = subprocess.run(
-            ["claude", "mcp", "add", "--scope", "user", "rememble", "rememble"],
+            [
+                "claude", "mcp", "add", "--scope", "user",
+                "rememble", "--", "rememble", "serve", "--mcp",
+            ],
             capture_output=True,
             text=True,
             timeout=15,
@@ -373,7 +376,8 @@ def _setupOpenCode() -> str:
     if not shutil.which("opencode"):
         return "skip"
     cfg = Path.home() / ".config" / "opencode" / "opencode.json"
-    _mergeJson(cfg, {"mcp": {"rememble": {"type": "local", "command": ["rememble"]}}})
+    entry = {"type": "local", "command": ["rememble", "serve", "--mcp"]}
+    _mergeJson(cfg, {"mcp": {"rememble": entry}})
     instructions_path = Path.home() / ".config" / "opencode" / "AGENTS.md"
     added = _appendInstructions(instructions_path)
     suffix = f", instructions added to {instructions_path}" if added else ""
@@ -384,7 +388,7 @@ def _setupCodex() -> str:
     if not shutil.which("codex"):
         return "skip"
     cfg = Path.home() / ".codex" / "config.toml"
-    block = '[mcp_servers.rememble]\ncommand = "rememble"\nargs = []'
+    block = '[mcp_servers.rememble]\ncommand = "rememble"\nargs = ["serve", "--mcp"]'
     _appendToml(cfg, "[mcp_servers.rememble]", block)
     instructions_path = Path.home() / ".codex" / "AGENTS.md"
     added = _appendInstructions(instructions_path)
