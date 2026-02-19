@@ -4,27 +4,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import ClassVar, Literal
+from typing import ClassVar
 
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 CONFIG_DIR = Path.home() / ".rememble"
 CONFIG_PATH = CONFIG_DIR / "config.json"
-
-
-class EmbeddingConfig(BaseModel):
-    provider: str = "ollama"
-    model: str = "nomic-embed-text"
-    dimensions: int = 768
-    ollama_url: str = "http://localhost:11434"
-    # OpenAI-compat settings (provider="compat")
-    api_type: str = "openrouter"  # label only: openai | openrouter | cohere | etc.
-    api_endpoint: str = "https://openrouter.ai/api/v1"
-    api_key: str | None = None
-    # Local settings
-    local_model: str = "sentence-transformers/all-MiniLM-L6-v2"
-    local_backend: Literal["torch", "onnx", "openvino"] = "onnx"
 
 
 class SearchConfig(BaseModel):
@@ -51,11 +37,15 @@ class ChunkingConfig(BaseModel):
 class RemembleConfig(BaseSettings):
     model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(
         env_prefix="REMEMBLE_",
-        env_nested_delimiter="__",
         extra="ignore",
     )
     db_path: str = Field(default_factory=lambda: str(CONFIG_DIR / "memory.db"))
-    embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
+    # Embedding API settings — prefixed so future API types (llm_api_*) stay distinct
+    embedding_api_url: str = "http://localhost:11434/v1"
+    embedding_api_key: str | None = None
+    embedding_api_model: str = "nomic-embed-text"
+    embedding_dimensions: int = 768
+    # Sub-configs
     search: SearchConfig = Field(default_factory=SearchConfig)
     rag: RAGConfig = Field(default_factory=RAGConfig)
     chunking: ChunkingConfig = Field(default_factory=ChunkingConfig)

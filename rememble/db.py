@@ -29,7 +29,7 @@ def connect(config: RemembleConfig) -> sqlite3.Connection:
     sqlite_vec.load(db)
     db.enable_load_extension(False)
 
-    _migrate(db, config.embedding.dimensions)
+    _migrate(db, config.embedding_dimensions)
     return db
 
 

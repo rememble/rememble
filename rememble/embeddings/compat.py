@@ -1,8 +1,6 @@
-"""OpenAI-compatible embeddings provider (OpenRouter, OpenAI, Cohere compat, etc.)."""
+"""OpenAI-compatible embeddings provider (Ollama, OpenRouter, OpenAI, Cohere, etc.)."""
 
 from __future__ import annotations
-
-import os
 
 import httpx
 
@@ -11,24 +9,18 @@ class CompatProvider:
     def __init__(
         self,
         model: str,
+        api_url: str = "http://localhost:11434/v1",
         api_key: str | None = None,
-        dimensions: int = 1536,
-        url: str = "https://openrouter.ai/api/v1",
-        api_type: str = "openrouter",
+        dimensions: int = 768,
     ):
         self._model = model
         self._dimensions = dimensions
-        self._api_type = api_type
-        self._api_key = (
-            api_key or os.environ.get("OPENROUTER_API_KEY") or os.environ.get("OPENAI_API_KEY")
-        )
-        if not self._api_key:
-            raise ValueError(
-                "API key required: set OPENROUTER_API_KEY, OPENAI_API_KEY, or config.embedding.api_key"  # noqa: E501
-            )
+        headers: dict[str, str] = {}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
         self._client = httpx.AsyncClient(
-            base_url=url.rstrip("/"),
-            headers={"Authorization": f"Bearer {self._api_key}"},
+            base_url=api_url.rstrip("/"),
+            headers=headers,
             timeout=60.0,
         )
 
@@ -38,7 +30,7 @@ class CompatProvider:
 
     @property
     def name(self) -> str:
-        return f"{self._api_type}/{self._model}"
+        return f"compat/{self._model}"
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         resp = await self._client.post("/embeddings", json={"model": self._model, "input": texts})
