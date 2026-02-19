@@ -5,8 +5,6 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
-import os
-import sqlite3
 from contextlib import asynccontextmanager
 from typing import Any, get_args, get_origin
 
@@ -18,66 +16,48 @@ from rich.console import Console
 from rich.table import Table
 
 from rememble.config import ChunkingConfig, RAGConfig, RemembleConfig, SearchConfig, loadConfig
-from rememble.db import (
-    addObservation,
-    addRelation,
-    connect,
-    deleteEntity,
-    getMemory,
-    insertMemory,
-    listMemories,
-    memoryStats,
-    softDeleteMemory,
-    upsertEntity,
+from rememble.service import (
+    svcAddObservations,
+    svcCreateEntities,
+    svcCreateRelations,
+    svcDeleteEntities,
+    svcForget,
+    svcListMemories,
+    svcMemoryStats,
+    svcRecall,
+    svcRemember,
+    svcResourceGraph,
+    svcResourceMemory,
+    svcResourceRecent,
+    svcResourceStats,
+    svcSearchGraph,
 )
-from rememble.embeddings.base import EmbeddingProvider
-from rememble.embeddings.factory import createProvider
-from rememble.ingest.chunker import chunkText, countTokens
-from rememble.rag.context import buildContext
-from rememble.search.fusion import hybridSearch
-from rememble.search.graph import graphSearch
+from rememble.state import AppState, createAppState
 
 logger = logging.getLogger("rememble")
 
-# Globals set during lifespan
-_db: sqlite3.Connection | None = None
-_embedder: EmbeddingProvider | None = None
-_config: RemembleConfig | None = None
+# Single global state, set during lifespan
+_state: AppState | None = None
+
+
+def _getState() -> AppState:
+    assert _state is not None, "AppState not initialized"
+    return _state
 
 
 @asynccontextmanager
 async def lifespan(server):
-    global _db, _embedder, _config
-    _config = loadConfig()
-    logger.info("Rememble starting — db: %s", _config.db_path)
+    global _state
+    _state = await createAppState()
 
-    _db = connect(_config)
-    _embedder = await createProvider(_config)
-    logger.info("Embedding provider: %s (%d dims)", _embedder.name, _embedder.dimensions)
+    yield {"db": _state.db, "embedder": _state.embedder, "config": _state.config}
 
-    yield {"db": _db, "embedder": _embedder, "config": _config}
-
-    if _db:
-        _db.close()
+    if _state.db:
+        _state.db.close()
     logger.info("Rememble shut down.")
 
 
 mcp = FastMCP("rememble", lifespan=lifespan)
-
-
-def _getDb() -> sqlite3.Connection:
-    assert _db is not None, "DB not initialized"
-    return _db
-
-
-def _getEmbedder() -> EmbeddingProvider:
-    assert _embedder is not None, "Embedder not initialized"
-    return _embedder
-
-
-def _getConfig() -> RemembleConfig:
-    assert _config is not None, "Config not initialized"
-    return _config
 
 
 # ============================================================
@@ -100,41 +80,7 @@ async def remember(
         tags: Comma-separated tags for filtering.
         metadata: Optional JSON string with extra data.
     """
-    db = _getDb()
-    embedder = _getEmbedder()
-    config = _getConfig()
-
-    chunks = chunkText(content, config.chunking.target_tokens, config.chunking.overlap_tokens)
-    ids: list[int] = []
-
-    for i, chunk in enumerate(chunks):
-        embedding = await embedder.embedOne(chunk)
-        chunk_meta = metadata
-        if len(chunks) > 1:
-            # Add parent tracking for chunked content
-            meta_dict = json.loads(metadata) if metadata else {}
-            meta_dict["chunk_index"] = i
-            meta_dict["chunk_count"] = len(chunks)
-            if ids:
-                meta_dict["parent_id"] = ids[0]
-            chunk_meta = json.dumps(meta_dict)
-
-        memory_id = insertMemory(
-            db,
-            content=chunk,
-            embedding=embedding,
-            source=source,
-            tags=tags,
-            metadata_json=chunk_meta,
-        )
-        ids.append(memory_id)
-
-    return {
-        "stored": True,
-        "memory_ids": ids,
-        "chunks": len(chunks),
-        "tokens": countTokens(content),
-    }
+    return await svcRemember(_getState(), content, source, tags, metadata)
 
 
 @mcp.tool
@@ -150,42 +96,7 @@ async def recall(
         limit: Max results to return.
         use_rag: If True, returns token-budgeted RAG context. If False, raw search results.
     """
-    db = _getDb()
-    embedder = _getEmbedder()
-    config = _getConfig()
-
-    query_embedding = await embedder.embedOne(query)
-
-    if use_rag:
-        context = buildContext(db, query, query_embedding, config.search, config.rag)
-        return {
-            "query": context.query,
-            "total_tokens": context.total_tokens,
-            "items": [item.model_dump() for item in context.items],
-            "entities": [
-                {
-                    "name": e.entity.name,
-                    "type": e.entity.entity_type,
-                    "observations": [o.content for o in e.observations],
-                }
-                for e in context.entities
-            ],
-        }
-
-    # Raw search mode
-    result = hybridSearch(db, query, query_embedding, config.search, limit=limit)
-    return {
-        "query": query,
-        "results": [r.model_dump() for r in result.results[:limit]],
-        "graph": [
-            {
-                "name": g.entity.name,
-                "type": g.entity.entity_type,
-                "observations": [o.content for o in g.observations],
-            }
-            for g in result.graph
-        ],
-    }
+    return await svcRecall(_getState(), query, limit, use_rag)
 
 
 @mcp.tool
@@ -195,9 +106,7 @@ async def forget(memory_id: int) -> dict:
     Args:
         memory_id: The ID of the memory to forget.
     """
-    db = _getDb()
-    deleted = softDeleteMemory(db, memory_id)
-    return {"forgotten": deleted, "memory_id": memory_id}
+    return await svcForget(_getState(), memory_id)
 
 
 @mcp.tool
@@ -217,44 +126,13 @@ async def list_memories(
         limit: Max results per page.
         offset: Pagination offset.
     """
-    db = _getDb()
-    rows = listMemories(db, source=source, tags=tags, status=status, limit=limit, offset=offset)
-    return {
-        "memories": [
-            {
-                "id": r["id"],
-                "content": r["content"][:200] + "..." if len(r["content"]) > 200 else r["content"],
-                "source": r["source"],
-                "tags": r["tags"],
-                "created_at": r["created_at"],
-                "access_count": r["access_count"],
-                "status": r["status"],
-            }
-            for r in rows
-        ],
-        "count": len(rows),
-        "offset": offset,
-    }
+    return await svcListMemories(_getState(), source, tags, status, limit, offset)
 
 
 @mcp.tool
 async def memory_stats() -> dict:
     """Get database statistics: memory counts, index sizes, provider info."""
-    db = _getDb()
-    embedder = _getEmbedder()
-    config = _getConfig()
-
-    stats = memoryStats(db)
-    db_path = os.path.expanduser(config.db_path)
-    db_size = os.path.getsize(db_path) if os.path.exists(db_path) else 0
-
-    return {
-        **stats,
-        "db_size_bytes": db_size,
-        "db_size_mb": round(db_size / (1024 * 1024), 2),
-        "embedding_provider": embedder.name,
-        "embedding_dimensions": embedder.dimensions,
-    }
+    return await svcMemoryStats(_getState())
 
 
 # ============================================================
@@ -271,18 +149,7 @@ async def create_entities(
     Args:
         entities: List of dicts with keys: name, entity_type, observations (optional).
     """
-    db = _getDb()
-    created: list[dict] = []
-
-    for e in entities:
-        entity_id = upsertEntity(db, e["name"], e["entity_type"])
-        obs_ids = []
-        for obs in e.get("observations", []):
-            obs_id = addObservation(db, entity_id, obs)
-            obs_ids.append(obs_id)
-        created.append({"entity_id": entity_id, "name": e["name"], "observations": len(obs_ids)})
-
-    return {"created": created}
+    return await svcCreateEntities(_getState(), entities)
 
 
 @mcp.tool
@@ -294,23 +161,7 @@ async def create_relations(
     Args:
         relations: List of dicts with keys: from_name (str), to_name (str), relation_type (str).
     """
-    db = _getDb()
-    created: list[dict] = []
-
-    for r in relations:
-        from_id = upsertEntity(db, r["from_name"], "unknown")
-        to_id = upsertEntity(db, r["to_name"], "unknown")
-        rel_id = addRelation(db, from_id, to_id, r["relation_type"], r.get("metadata"))
-        created.append(
-            {
-                "relation_id": rel_id,
-                "from": r["from_name"],
-                "to": r["to_name"],
-                "type": r["relation_type"],
-            }
-        )
-
-    return {"created": created}
+    return await svcCreateRelations(_getState(), relations)
 
 
 @mcp.tool
@@ -326,18 +177,7 @@ async def add_observations(
         observations: List of observation strings.
         source: Optional source of the observations.
     """
-    db = _getDb()
-    row = db.execute("SELECT id FROM entities WHERE name = ?", (entity_name,)).fetchone()
-    if not row:
-        return {"error": f"Entity '{entity_name}' not found"}
-
-    entity_id = row["id"]
-    added = []
-    for obs in observations:
-        obs_id = addObservation(db, entity_id, obs, source=source)
-        added.append(obs_id)
-
-    return {"entity": entity_name, "observations_added": len(added)}
+    return await svcAddObservations(_getState(), entity_name, observations, source)
 
 
 @mcp.tool
@@ -348,26 +188,7 @@ async def search_graph(query: str, limit: int = 10) -> dict:
         query: Search text to match against entity names and observations.
         limit: Max entities to return.
     """
-    db = _getDb()
-    results = graphSearch(db, query, limit=limit)
-    return {
-        "entities": [
-            {
-                "name": r.entity.name,
-                "type": r.entity.entity_type,
-                "observations": [o.content for o in r.observations],
-                "relations": [
-                    {
-                        "type": rwe.relation.relation_type,
-                        "entity": rwe.entity.name,
-                        "direction": rwe.direction,
-                    }
-                    for rwe in r.relations
-                ],
-            }
-            for r in results
-        ],
-    }
+    return await svcSearchGraph(_getState(), query, limit)
 
 
 @mcp.tool
@@ -377,12 +198,7 @@ async def delete_entities(names: list[str]) -> dict:
     Args:
         names: List of entity names to delete.
     """
-    db = _getDb()
-    deleted = []
-    for name in names:
-        if deleteEntity(db, name):
-            deleted.append(name)
-    return {"deleted": deleted}
+    return await svcDeleteEntities(_getState(), names)
 
 
 # ============================================================
@@ -393,66 +209,25 @@ async def delete_entities(names: list[str]) -> dict:
 @mcp.resource("memory://stats")
 def resource_stats() -> dict:
     """Current database statistics."""
-    db = _getDb()
-    return memoryStats(db)
+    return svcResourceStats(_getState())
 
 
 @mcp.resource("memory://recent")
 def resource_recent() -> list[dict]:
     """20 most recent memories."""
-    db = _getDb()
-    rows = listMemories(db, limit=20)
-    return [
-        {
-            "id": r["id"],
-            "content": r["content"][:200],
-            "source": r["source"],
-            "tags": r["tags"],
-            "created_at": r["created_at"],
-        }
-        for r in rows
-    ]
+    return svcResourceRecent(_getState())
 
 
 @mcp.resource("memory://graph")
 def resource_graph() -> dict:
     """Full entity/relation graph."""
-    db = _getDb()
-    entities = db.execute("SELECT * FROM entities ORDER BY name").fetchall()
-    relations = db.execute(
-        """SELECT r.*, e1.name AS from_name, e2.name AS to_name
-           FROM relations r
-           JOIN entities e1 ON e1.id = r.from_entity_id
-           JOIN entities e2 ON e2.id = r.to_entity_id"""
-    ).fetchall()
-    return {
-        "entities": [{"name": e["name"], "type": e["entity_type"]} for e in entities],
-        "relations": [
-            {"from": r["from_name"], "to": r["to_name"], "type": r["relation_type"]}
-            for r in relations
-        ],
-    }
+    return svcResourceGraph(_getState())
 
 
 @mcp.resource("memory://{memory_id}")
 def resource_memory(memory_id: str) -> dict:
     """Fetch a specific memory by ID."""
-    db = _getDb()
-    row = getMemory(db, int(memory_id))
-    if not row:
-        return {"error": "Memory not found"}
-    return {
-        "id": row["id"],
-        "content": row["content"],
-        "source": row["source"],
-        "tags": row["tags"],
-        "metadata": row["metadata_json"],
-        "created_at": row["created_at"],
-        "updated_at": row["updated_at"],
-        "accessed_at": row["accessed_at"],
-        "access_count": row["access_count"],
-        "status": row["status"],
-    }
+    return svcResourceMemory(_getState(), memory_id)
 
 
 # ============================================================
@@ -554,8 +329,20 @@ _cli = typer.Typer(
 )
 _config_cli = typer.Typer(help="Read/write [bold]~/.rememble/config.json[/bold].")
 _cli.add_typer(_config_cli, name="config")
+_entity_cli = typer.Typer(help="Knowledge graph entity operations.")
+_cli.add_typer(_entity_cli, name="entity")
+_graph_cli = typer.Typer(help="Knowledge graph search.")
+_cli.add_typer(_graph_cli, name="graph")
 
 _console = Console()
+
+
+def _getClient():
+    """Lazy-import and return a RemembleClient connected to running daemon."""
+    from rememble.client import RemembleClient
+
+    cfg = loadConfig()
+    return RemembleClient(f"http://localhost:{cfg.port}")
 
 
 @_cli.callback(invoke_without_command=True)
@@ -564,6 +351,286 @@ def _default(ctx: typer.Context) -> None:
     if ctx.invoked_subcommand is None:
         logging.basicConfig(level=logging.INFO, format="%(name)s | %(message)s")
         mcp.run(transport="stdio")
+
+
+# ── serve / stop / status ────────────────────────────────────
+
+
+@_cli.command()
+def serve(
+    mcp_mode: bool = typer.Option(False, "--mcp", help="Run as MCP stdio server instead of HTTP"),
+    daemon: bool = typer.Option(False, "--daemon", "-d", help="Run HTTP server in background"),
+    port: int | None = typer.Option(None, "--port", "-p", help="HTTP port (default from config)"),
+    format: str = typer.Option("human", "--format", "-f", help="Output format: human|json"),
+) -> None:
+    """Start the HTTP API server (or MCP stdio with --mcp)."""
+    if mcp_mode:
+        logging.basicConfig(level=logging.INFO, format="%(name)s | %(message)s")
+        mcp.run(transport="stdio")
+        return
+
+    cfg = loadConfig()
+    p = port or cfg.port
+
+    if daemon:
+        from rememble.daemon import daemonize, isRunning
+
+        if isRunning(cfg.pid_path):
+            if format == "json":
+                print(json.dumps({"ok": False, "error": "daemon already running"}))
+            else:
+                _console.print("[red]Daemon already running[/red]")
+            raise typer.Exit(1)
+
+        daemonize(cfg.pid_path)
+
+    if format == "json" and not daemon:
+        print(json.dumps({"ok": True, "port": p, "daemon": daemon}))
+
+    import uvicorn
+
+    from rememble.api import app
+
+    logging.basicConfig(level=logging.INFO, format="%(name)s | %(message)s")
+    uvicorn.run(app, host="0.0.0.0", port=p, log_level="info")
+
+
+@_cli.command()
+def stop(
+    format: str = typer.Option("human", "--format", "-f", help="Output format: human|json"),
+) -> None:
+    """Stop the running daemon."""
+    from rememble.daemon import stopDaemon
+
+    cfg = loadConfig()
+    stopped = stopDaemon(cfg.pid_path)
+    if format == "json":
+        print(json.dumps({"ok": stopped}))
+    elif stopped:
+        _console.print("[green]Daemon stopped[/green]")
+    else:
+        _console.print("[yellow]No daemon running[/yellow]")
+
+
+@_cli.command()
+def status(
+    format: str = typer.Option("human", "--format", "-f", help="Output format: human|json"),
+) -> None:
+    """Check if the daemon is running."""
+    from rememble.daemon import isRunning, readPid
+
+    cfg = loadConfig()
+    running = isRunning(cfg.pid_path)
+    pid = readPid(cfg.pid_path)
+    if format == "json":
+        print(json.dumps({"running": running, "pid": pid, "port": cfg.port}))
+    elif running:
+        _console.print(f"[green]Running[/green] — pid {pid}, port {cfg.port}")
+    else:
+        _console.print("[dim]Not running[/dim]")
+
+
+# ── client commands (talk to running daemon) ─────────────────
+
+
+@_cli.command("remember")
+def cli_remember(
+    content: str = typer.Argument(help="Text content to remember"),
+    source: str | None = typer.Option(None, "--source", "-s", help="Source label"),
+    tags: str | None = typer.Option(None, "--tags", "-t", help="Comma-separated tags"),
+    format: str = typer.Option("human", "--format", "-f", help="Output format: human|json"),
+) -> None:
+    """Store a memory via the HTTP API."""
+    try:
+        with _getClient() as c:
+            result = c.remember(content, source=source, tags=tags)
+    except Exception as e:
+        if format == "json":
+            print(json.dumps({"ok": False, "error": str(e)}))
+        else:
+            _console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1) from e
+
+    if format == "json":
+        print(json.dumps(result))
+    else:
+        ids = result.get("memory_ids", [])
+        _console.print(f"[green]Stored[/green] {len(ids)} chunk(s) — ids: {ids}")
+
+
+@_cli.command("recall")
+def cli_recall(
+    query: str = typer.Argument(help="Search query"),
+    limit: int = typer.Option(10, "--limit", "-n", help="Max results"),
+    no_rag: bool = typer.Option(False, "--no-rag", help="Raw results instead of RAG context"),
+    format: str = typer.Option("human", "--format", "-f", help="Output format: human|json"),
+) -> None:
+    """Search memories via the HTTP API."""
+    try:
+        with _getClient() as c:
+            result = c.recall(query, limit=limit, use_rag=not no_rag)
+    except Exception as e:
+        if format == "json":
+            print(json.dumps({"ok": False, "error": str(e)}))
+        else:
+            _console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1) from e
+
+    if format == "json":
+        print(json.dumps(result))
+        return
+
+    if no_rag:
+        for r in result.get("results", []):
+            _console.print(f"  [bold]#{r['memory_id']}[/bold] (score: {r['score']:.3f})")
+            if r.get("snippet"):
+                _console.print(f"    {r['snippet'][:120]}")
+    else:
+        for item in result.get("items", []):
+            _console.print(f"  [{item['kind']}] {item['text'][:120]}")
+        _console.print(f"[dim]tokens: {result.get('total_tokens', 0)}[/dim]")
+
+
+@_cli.command("forget")
+def cli_forget(
+    memory_id: int = typer.Argument(help="Memory ID to forget"),
+    format: str = typer.Option("human", "--format", "-f", help="Output format: human|json"),
+) -> None:
+    """Soft-delete a memory via the HTTP API."""
+    try:
+        with _getClient() as c:
+            result = c.forget(memory_id)
+    except Exception as e:
+        if format == "json":
+            print(json.dumps({"ok": False, "error": str(e)}))
+        else:
+            _console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1) from e
+
+    if format == "json":
+        print(json.dumps(result))
+    elif result.get("forgotten"):
+        _console.print(f"[green]Forgotten[/green] memory #{memory_id}")
+    else:
+        _console.print(f"[yellow]Not found[/yellow] memory #{memory_id}")
+
+
+@_cli.command("list")
+def cli_list(
+    source: str | None = typer.Option(None, "--source", "-s", help="Filter by source"),
+    tags: str | None = typer.Option(None, "--tags", "-t", help="Filter by tags"),
+    limit: int = typer.Option(20, "--limit", "-n", help="Max results"),
+    format: str = typer.Option("human", "--format", "-f", help="Output format: human|json"),
+) -> None:
+    """List memories via the HTTP API."""
+    try:
+        with _getClient() as c:
+            result = c.listMemories(source=source, tags=tags, limit=limit)
+    except Exception as e:
+        if format == "json":
+            print(json.dumps({"ok": False, "error": str(e)}))
+        else:
+            _console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1) from e
+
+    if format == "json":
+        print(json.dumps(result))
+        return
+
+    t = Table(box=box.SIMPLE)
+    t.add_column("ID", style="bold")
+    t.add_column("Content")
+    t.add_column("Source", style="dim")
+    t.add_column("Tags", style="dim")
+    for m in result.get("memories", []):
+        t.add_row(str(m["id"]), m["content"][:80], m.get("source") or "", m.get("tags") or "")
+    _console.print(t)
+    _console.print(f"[dim]{result.get('count', 0)} memories[/dim]")
+
+
+@_cli.command("stats")
+def cli_stats(
+    format: str = typer.Option("human", "--format", "-f", help="Output format: human|json"),
+) -> None:
+    """Show database stats via the HTTP API."""
+    try:
+        with _getClient() as c:
+            result = c.stats()
+    except Exception as e:
+        if format == "json":
+            print(json.dumps({"ok": False, "error": str(e)}))
+        else:
+            _console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1) from e
+
+    if format == "json":
+        print(json.dumps(result))
+        return
+
+    t = Table(show_header=False, box=box.SIMPLE)
+    t.add_column("key", style="dim")
+    t.add_column("val")
+    for k, v in result.items():
+        t.add_row(k, str(v))
+    _console.print(t)
+
+
+# ── entity + graph subcommands ───────────────────────────────
+
+
+@_entity_cli.command("create")
+def cli_entity_create(
+    name: str = typer.Option(..., "--name", help="Entity name"),
+    entity_type: str = typer.Option(..., "--type", help="Entity type"),
+    format: str = typer.Option("human", "--format", "-f", help="Output format: human|json"),
+) -> None:
+    """Create an entity via the HTTP API."""
+    try:
+        with _getClient() as c:
+            result = c.createEntities([{"name": name, "entity_type": entity_type}])
+    except Exception as e:
+        if format == "json":
+            print(json.dumps({"ok": False, "error": str(e)}))
+        else:
+            _console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1) from e
+
+    if format == "json":
+        print(json.dumps(result))
+    else:
+        _console.print(f"[green]Created[/green] entity '{name}' (type: {entity_type})")
+
+
+@_graph_cli.command("search")
+def cli_graph_search(
+    query: str = typer.Argument(help="Search query"),
+    limit: int = typer.Option(10, "--limit", "-n", help="Max results"),
+    format: str = typer.Option("human", "--format", "-f", help="Output format: human|json"),
+) -> None:
+    """Search the knowledge graph via the HTTP API."""
+    try:
+        with _getClient() as c:
+            result = c.searchGraph(query, limit=limit)
+    except Exception as e:
+        if format == "json":
+            print(json.dumps({"ok": False, "error": str(e)}))
+        else:
+            _console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1) from e
+
+    if format == "json":
+        print(json.dumps(result))
+        return
+
+    for ent in result.get("entities", []):
+        _console.print(f"  [bold]{ent['name']}[/bold] ({ent['type']})")
+        for obs in ent.get("observations", []):
+            _console.print(f"    - {obs}")
+        for rel in ent.get("relations", []):
+            _console.print(f"    → {rel['type']} → {rel['entity']}")
+
+
+# ── setup / uninstall / config (unchanged) ───────────────────
 
 
 @_cli.command()

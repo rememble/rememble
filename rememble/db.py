@@ -14,12 +14,12 @@ from rememble.config import RemembleConfig
 SCHEMA_VERSION = 1
 
 
-def connect(config: RemembleConfig) -> sqlite3.Connection:
+def connect(config: RemembleConfig, check_same_thread: bool = True) -> sqlite3.Connection:
     """Open DB, load sqlite-vec, run migrations."""
     db_path = Path(config.db_path).expanduser()
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
-    db = sqlite3.connect(str(db_path))
+    db = sqlite3.connect(str(db_path), check_same_thread=check_same_thread)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA journal_mode=WAL")
     db.execute("PRAGMA foreign_keys=ON")
