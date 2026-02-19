@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
 import sqlite3
 from contextlib import asynccontextmanager
 
+import typer
 from fastmcp import FastMCP
+from rich.console import Console
+from rich.syntax import Syntax
 
 from rememble.config import RemembleConfig, loadConfig
 from rememble.db import (
@@ -45,7 +49,7 @@ async def lifespan(server):
     logger.info("Rememble starting — db: %s", _config.db_path)
 
     _db = connect(_config)
-    _embedder = await createProvider(_config.embedding)
+    _embedder = await createProvider(_config)
     logger.info("Embedding provider: %s (%d dims)", _embedder.name, _embedder.dimensions)
 
     yield {"db": _db, "embedder": _embedder, "config": _config}
@@ -449,13 +453,105 @@ def resource_memory(memory_id: str) -> dict:
 
 
 # ============================================================
-# Entry point
+# CLI (typer)
 # ============================================================
 
+_cli = typer.Typer(
+    name="rememble",
+    help="Local MCP memory server with hybrid search and knowledge graph.",
+    no_args_is_help=False,
+    rich_markup_mode="rich",
+)
+_config_cli = typer.Typer(help="Read/write [bold]~/.rememble/config.json[/bold].")
+_cli.add_typer(_config_cli, name="config")
 
-def main():
-    logging.basicConfig(level=logging.INFO, format="%(name)s | %(message)s")
-    mcp.run(transport="stdio")
+_console = Console()
+
+
+@_cli.callback(invoke_without_command=True)
+def _default(ctx: typer.Context) -> None:
+    """Start the MCP server (default when no subcommand given)."""
+    if ctx.invoked_subcommand is None:
+        logging.basicConfig(level=logging.INFO, format="%(name)s | %(message)s")
+        mcp.run(transport="stdio")
+
+
+@_cli.command()
+def setup() -> None:
+    """Interactive setup wizard — configure embedding and AI agents."""
+    from rememble.setup import runSetup
+
+    runSetup()
+
+
+@_cli.command()
+def uninstall() -> None:
+    """Remove rememble MCP entries and instructions from all agent configs."""
+    from rememble.setup import runUninstall
+
+    runUninstall()
+
+
+@_config_cli.command("list")
+def config_list() -> None:
+    """Pretty-print the current config."""
+    from rememble.config import loadConfig
+
+    _console.print(Syntax(loadConfig().model_dump_json(indent=2), "json"))
+
+
+@_config_cli.command("get")
+def config_get(
+    dotpath: str = typer.Argument(help="Dot-separated key, e.g. embedding_api_url"),
+) -> None:
+    """Get a single config value."""
+    from rememble.config import loadConfig
+
+    node = loadConfig().model_dump()
+    for part in dotpath.split("."):
+        if isinstance(node, dict) and part in node:
+            node = node[part]
+        else:
+            _console.print(f"[red]Key not found:[/red] {dotpath}")
+            raise typer.Exit(1)
+    _console.print(node)
+
+
+@_config_cli.command("set")
+def config_set(
+    dotpath: str = typer.Argument(help="Dot-separated key path"),
+    value: str = typer.Argument(help="Value (auto-coerced to int/float/bool)"),
+) -> None:
+    """Set a config value."""
+    from rememble.config import CONFIG_PATH, RemembleConfig
+    from rememble.setup import _coerceValue
+
+    raw: dict = {}
+    if CONFIG_PATH.exists():
+        with contextlib.suppress(json.JSONDecodeError):
+            raw = json.loads(CONFIG_PATH.read_text())
+
+    parts = dotpath.split(".")
+    node = raw
+    for part in parts[:-1]:
+        if part not in node or not isinstance(node[part], dict):
+            node[part] = {}
+        node = node[part]
+    node[parts[-1]] = _coerceValue(value)
+
+    try:
+        RemembleConfig(**raw)
+    except Exception as e:
+        _console.print(f"[red]Invalid value:[/red] {e}")
+        raise typer.Exit(1) from e
+
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CONFIG_PATH.write_text(json.dumps(raw, indent=2) + "\n")
+    _console.print(f"[green]Set[/green] {dotpath} = {_coerceValue(value)!r}")
+
+
+def main() -> None:
+    _cli()
 
 
 if __name__ == "__main__":
