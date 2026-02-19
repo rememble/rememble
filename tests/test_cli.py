@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from typer.testing import CliRunner
@@ -128,3 +128,113 @@ def test_uninstall_yes_json():
     assert data["ok"] is True
     assert "agents" in data
     assert "db_deleted" in data
+
+
+# ── status ──────────────────────────────────────────────────
+
+
+def test_status_notRunning():
+    result = runner.invoke(_cli, ["status", "--format", "json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["running"] is False
+
+
+# ── stop ────────────────────────────────────────────────────
+
+
+def test_stop_notRunning():
+    result = runner.invoke(_cli, ["stop", "--format", "json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["ok"] is False
+
+
+# ── client commands (mocked RemembleClient) ─────────────────
+
+
+def _mockClient(**methods):
+    """Create a mock RemembleClient with specified method return values."""
+    mock = MagicMock()
+    for name, retval in methods.items():
+        getattr(mock, name).return_value = retval
+    mock.__enter__ = MagicMock(return_value=mock)
+    mock.__exit__ = MagicMock(return_value=False)
+    return mock
+
+
+def test_cli_remember_json():
+    mock = _mockClient(remember={"stored": True, "memory_ids": [1], "chunks": 1, "tokens": 3})
+    with patch("rememble.server._getClient", return_value=mock):
+        result = runner.invoke(_cli, ["remember", "hello world", "--format", "json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["stored"] is True
+
+
+def test_cli_recall_json():
+    mock = _mockClient(recall={"query": "q", "total_tokens": 10, "items": []})
+    with patch("rememble.server._getClient", return_value=mock):
+        result = runner.invoke(_cli, ["recall", "query", "--format", "json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["query"] == "q"
+
+
+def test_cli_forget_json():
+    mock = _mockClient(forget={"forgotten": True, "memory_id": 1})
+    with patch("rememble.server._getClient", return_value=mock):
+        result = runner.invoke(_cli, ["forget", "1", "--format", "json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["forgotten"] is True
+
+
+def test_cli_list_json():
+    mock = _mockClient(listMemories={"memories": [], "count": 0, "offset": 0})
+    with patch("rememble.server._getClient", return_value=mock):
+        result = runner.invoke(_cli, ["list", "--format", "json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["count"] == 0
+
+
+def test_cli_stats_json():
+    mock = _mockClient(stats={"total_memories": 5})
+    with patch("rememble.server._getClient", return_value=mock):
+        result = runner.invoke(_cli, ["stats", "--format", "json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["total_memories"] == 5
+
+
+def test_cli_entity_create_json():
+    mock = _mockClient(createEntities={"created": [{"name": "A", "entity_id": 1}]})
+    with patch("rememble.server._getClient", return_value=mock):
+        result = runner.invoke(
+            _cli, ["entity", "create", "--name", "A", "--type", "test", "--format", "json"]
+        )
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert len(data["created"]) == 1
+
+
+def test_cli_graph_search_json():
+    mock = _mockClient(searchGraph={"entities": [{"name": "A", "type": "test"}]})
+    with patch("rememble.server._getClient", return_value=mock):
+        result = runner.invoke(_cli, ["graph", "search", "A", "--format", "json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert len(data["entities"]) == 1
+
+
+def test_cli_remember_connectionError():
+    mock = MagicMock()
+    mock.__enter__ = MagicMock(return_value=mock)
+    mock.__exit__ = MagicMock(return_value=False)
+    mock.remember.side_effect = Exception("Connection refused")
+    with patch("rememble.server._getClient", return_value=mock):
+        result = runner.invoke(_cli, ["remember", "test", "--format", "json"])
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
