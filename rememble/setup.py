@@ -31,6 +31,22 @@ Tag with project/topic (`source="project:myapp"`) for easy filtering.
 _MCP_ENTRY: dict = {"command": "rememble"}
 
 # (label, api_url, needs_key, [(model_name, dimensions)])
+_PROVIDER_SLUGS: dict[str, int] = {
+    "ollama": 0,
+    "openai": 1,
+    "openrouter": 2,
+    "cohere": 3,
+}
+
+_AGENT_SLUGS: dict[str, int] = {
+    "claude-code": 0,
+    "claude-desktop": 1,
+    "opencode": 2,
+    "codex": 3,
+    "cursor": 4,
+    "windsurf": 5,
+}
+
 _PROVIDERS: list[tuple[str, str, bool, list[tuple[str, int]]]] = [
     (
         "Ollama",
@@ -183,72 +199,116 @@ def _removeTomlSection(path: Path, section: str) -> bool:
 # ============================================================
 
 
-def _configWizard() -> None:
-    """Interactive config prompts. Modifies ~/.rememble/config.json."""
+def _configWizard(
+    provider: str | None = None,
+    api_key: str | None = None,
+    model: str | None = None,
+    format: str = "human",
+) -> dict[str, Any] | None:
+    """Config prompts (interactive or non-interactive). Returns changes dict or None on cancel."""
     from rememble.config import CONFIG_PATH, RemembleConfig, loadConfig
 
     config = loadConfig()
 
-    # Pre-select provider based on current URL
-    default_provider = next(
-        (i for i, (_, url, _, _) in enumerate(_PROVIDERS) if url == config.embedding_api_url), 0
-    )
-    provider_idx: int | None = questionary.select(
-        "Select embedding provider:",
-        choices=[
-            questionary.Choice(title=f"{label}  ({url})", value=i)
-            for i, (label, url, _, _) in enumerate(_PROVIDERS)
-        ],
-        default=questionary.Choice(
-            title=f"{_PROVIDERS[default_provider][0]}  ({_PROVIDERS[default_provider][1]})",
-            value=default_provider,
-        ),
-    ).ask()
-    if provider_idx is None:
-        return  # ctrl-c
+    # Resolve provider index
+    if provider is not None:
+        slug = provider.lower()
+        if slug not in _PROVIDER_SLUGS:
+            valid = ", ".join(_PROVIDER_SLUGS)
+            if format == "json":
+                print(
+                    json.dumps(
+                        {"ok": False, "error": f"Unknown provider {provider!r}; valid: {valid}"}
+                    )
+                )
+            else:
+                console.print(f"[red]Unknown provider:[/red] {provider!r}. Valid: {valid}")
+            return None
+        provider_idx: int | None = _PROVIDER_SLUGS[slug]
+    else:
+        default_provider = next(
+            (i for i, (_, url, _, _) in enumerate(_PROVIDERS) if url == config.embedding_api_url), 0
+        )
+        provider_idx = questionary.select(
+            "Select embedding provider:",
+            choices=[
+                questionary.Choice(title=f"{label}  ({url})", value=i)
+                for i, (label, url, _, _) in enumerate(_PROVIDERS)
+            ],
+            default=questionary.Choice(
+                title=f"{_PROVIDERS[default_provider][0]}  ({_PROVIDERS[default_provider][1]})",
+                value=default_provider,
+            ),
+        ).ask()
+        if provider_idx is None:
+            return None  # ctrl-c
 
     label, url, needs_key, models = _PROVIDERS[provider_idx]
 
-    # API key (only if provider requires one)
-    api_key: str | None = None
+    # API key
+    resolved_key: str | None = None
     if needs_key:
-        current_key = config.embedding_api_key
-        hint = " (press enter to keep existing)" if current_key else ""
-        new_key = questionary.password(f"API key{hint}:").ask()
-        if new_key is None:
-            return  # ctrl-c
-        api_key = new_key.strip() if new_key.strip() else current_key
-    # Ollama/no-key provider: api_key stays None
+        if api_key is not None:
+            resolved_key = api_key if api_key.strip() else config.embedding_api_key
+        else:
+            current_key = config.embedding_api_key
+            hint = " (press enter to keep existing)" if current_key else ""
+            new_key = questionary.password(f"API key{hint}:").ask()
+            if new_key is None:
+                return None  # ctrl-c
+            resolved_key = new_key.strip() if new_key.strip() else current_key
 
-    # Pre-select model based on current value
-    default_model = next(
-        (i for i, (m, _) in enumerate(models) if m == config.embedding_api_model), 0
-    )
-    model_result: tuple[str, int] | None = questionary.select(
-        "Select embedding model:",
-        choices=[
-            questionary.Choice(title=f"{m}  ({dims} dims)", value=(m, dims)) for m, dims in models
-        ],
-        default=questionary.Choice(
-            title=f"{models[default_model][0]}  ({models[default_model][1]} dims)",
-            value=models[default_model],
-        ),
-    ).ask()
-    if model_result is None:
-        return  # ctrl-c
-    selected_model, selected_dims = model_result
+    # Resolve model
+    if model is not None:
+        match = next(((m, d) for m, d in models if m == model), None)
+        if match is None:
+            valid_models = ", ".join(m for m, _ in models)
+            if format == "json":
+                print(
+                    json.dumps(
+                        {
+                            "ok": False,
+                            "error": f"Unknown model {model!r} for {label}; valid: {valid_models}",
+                        }
+                    )
+                )
+            else:
+                console.print(
+                    f"[red]Unknown model:[/red] {model!r}. Valid for {label}: {valid_models}"
+                )
+            return None
+        selected_model, selected_dims = match
+    else:
+        default_model = next(
+            (i for i, (m, _) in enumerate(models) if m == config.embedding_api_model), 0
+        )
+        model_result: tuple[str, int] | None = questionary.select(
+            "Select embedding model:",
+            choices=[
+                questionary.Choice(title=f"{m}  ({dims} dims)", value=(m, dims))
+                for m, dims in models
+            ],
+            default=questionary.Choice(
+                title=f"{models[default_model][0]}  ({models[default_model][1]} dims)",
+                value=models[default_model],
+            ),
+        ).ask()
+        if model_result is None:
+            return None  # ctrl-c
+        selected_model, selected_dims = model_result
 
     updates: dict[str, Any] = {
         "embedding_api_url": url,
-        "embedding_api_key": api_key,
+        "embedding_api_key": resolved_key,
         "embedding_api_model": selected_model,
         "embedding_dimensions": selected_dims,
     }
 
     changed = {k: v for k, v in updates.items() if getattr(config, k) != v}
     if not changed:
-        print("No changes to embedding config.")
-        return
+        if format == "human":
+            console.print("No changes to embedding config.")
+        return {}
 
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     raw: dict = {}
@@ -260,7 +320,9 @@ def _configWizard() -> None:
     raw.update(changed)
     RemembleConfig(**raw)  # validate before writing
     CONFIG_PATH.write_text(json.dumps(raw, indent=2) + "\n")
-    print(f"Config saved to {CONFIG_PATH}")
+    if format == "human":
+        console.print(f"Config saved to {CONFIG_PATH}")
+    return {"provider": label, "model": selected_model, "dimensions": selected_dims}
 
 
 # ============================================================
@@ -467,24 +529,45 @@ def _printAgentResult(name: str, result: str) -> None:
         console.print(f"  [green]✓[/green]  {name:<16} — {detail}")
 
 
-def runUninstall() -> None:
-    console.rule("[bold]Rememble Uninstall[/bold]")
-    console.print()
-    for name, fn in _UNINSTALL_AGENTS:
-        _printAgentResult(name, fn())
+def runUninstall(yes: bool = False, format: str = "human") -> None:
+    if format == "human":
+        console.rule("[bold]Rememble Uninstall[/bold]")
+        console.print()
 
-    console.print()
-    confirm = questionary.confirm("Delete ~/.rememble/ (database and config)?", default=False).ask()
+    agent_results: list[dict[str, str]] = []
+    for name, fn in _UNINSTALL_AGENTS:
+        outcome = fn()
+        agent_results.append({"agent": name, "result": outcome})
+        if format == "human":
+            _printAgentResult(name, outcome)
+
+    if format == "human":
+        console.print()
+
+    if yes:
+        confirm = True
+    else:
+        confirm = questionary.confirm(
+            "Delete ~/.rememble/ (database and config)?", default=False
+        ).ask()
+
+    db_deleted = False
     if confirm:
         from rememble.config import CONFIG_DIR
 
         if CONFIG_DIR.exists():
             shutil.rmtree(CONFIG_DIR)
-            console.print(f"[red]Deleted[/red] {CONFIG_DIR}")
-        else:
+            db_deleted = True
+            if format == "human":
+                console.print(f"[red]Deleted[/red] {CONFIG_DIR}")
+        elif format == "human":
             console.print("[dim]~/.rememble/ not found, nothing to delete.[/dim]")
-    console.print()
-    console.print("[bold green]Done.[/bold green] Rememble has been uninstalled.")
+
+    if format == "human":
+        console.print()
+        console.print("[bold green]Done.[/bold green] Rememble has been uninstalled.")
+    else:
+        print(json.dumps({"ok": True, "agents": agent_results, "db_deleted": db_deleted}))
 
 
 # ============================================================
@@ -514,45 +597,96 @@ def _coerceValue(value: str) -> Any:
 # ============================================================
 
 
-def runSetup() -> None:
-    console.rule("[bold blue]Rememble Setup[/bold blue]")
-    console.print()
+def runSetup(
+    provider: str | None = None,
+    api_key: str | None = None,
+    model: str | None = None,
+    agents: str | None = None,
+    yes: bool = False,
+    format: str = "human",
+) -> None:
+    if format == "human":
+        console.rule("[bold blue]Rememble Setup[/bold blue]")
+        console.print()
+        console.rule("Step 1/2 — Embedding", align="left")
 
-    console.rule("Step 1/2 — Embedding", align="left")
-    _configWizard()
-    console.print()
+    wizard_result = _configWizard(provider=provider, api_key=api_key, model=model, format=format)
+    if wizard_result is None:
+        return  # cancelled or error
 
-    console.rule("Step 2/2 — Agents", align="left")
-    agent_choices = [
-        questionary.Choice(
-            title=f"{name}  ({'detected' if _isDetected(name) else 'not detected'})",
-            value=i,
-            checked=_isDetected(name),
-        )
-        for i, (name, _, _) in enumerate(_AGENTS)
-    ]
-    selected_indices: list[int] | None = questionary.checkbox(
-        "Select agents to configure:",
-        choices=agent_choices,
-    ).ask()
-    if selected_indices is None:
-        return  # ctrl-c
+    if format == "human":
+        console.print()
+        console.rule("Step 2/2 — Agents", align="left")
 
-    console.print()
-    console.print("[bold]Applying...[/bold]")
-    console.print()
+    # Resolve agent indices
+    if agents is not None or yes:
+        if agents is not None:
+            slugs = [s.strip() for s in agents.split(",") if s.strip()]
+            selected_indices: list[int] = []
+            for slug in slugs:
+                idx = _AGENT_SLUGS.get(slug.lower())
+                if idx is None:
+                    valid = ", ".join(_AGENT_SLUGS)
+                    if format == "json":
+                        print(
+                            json.dumps(
+                                {"ok": False, "error": f"Unknown agent {slug!r}; valid: {valid}"}
+                            )
+                        )
+                    else:
+                        console.print(f"[red]Unknown agent:[/red] {slug!r}. Valid: {valid}")
+                    return
+                selected_indices.append(idx)
+        else:
+            # --yes with no --agents: install all detected
+            selected_indices = [i for i, (name, _, _) in enumerate(_AGENTS) if _isDetected(name)]
+    else:
+        agent_choices = [
+            questionary.Choice(
+                title=f"{name}  ({'detected' if _isDetected(name) else 'not detected'})",
+                value=i,
+                checked=_isDetected(name),
+            )
+            for i, (name, _, _) in enumerate(_AGENTS)
+        ]
+        result = questionary.checkbox(
+            "Select agents to configure:",
+            choices=agent_choices,
+        ).ask()
+        if result is None:
+            return  # ctrl-c
+        selected_indices = result
 
+    if format == "human":
+        console.print()
+        console.print("[bold]Applying...[/bold]")
+        console.print()
+
+    agents_configured: list[dict[str, str]] = []
     any_applied = False
     for i, (name, _, fn) in enumerate(_AGENTS):
         if i not in selected_indices:
             continue
         any_applied = True
-        _printAgentResult(name, fn())
+        outcome = fn()
+        agents_configured.append({"agent": name, "result": outcome})
+        if format == "human":
+            _printAgentResult(name, outcome)
 
-    if not any_applied:
-        console.print("[dim]No agents selected.[/dim]")
-
-    console.print()
-    console.print(
-        "[bold green]Done.[/bold green] Restart any running agents to pick up the new MCP server."
-    )
+    if format == "human":
+        if not any_applied:
+            console.print("[dim]No agents selected.[/dim]")
+        console.print()
+        console.print(
+            "[bold green]Done.[/bold green] Restart any running agents to pick up the new MCP server."  # noqa: E501
+        )
+    else:
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "embedding": wizard_result,
+                    "agents_configured": agents_configured,
+                }
+            )
+        )

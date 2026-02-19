@@ -8,13 +8,16 @@ import logging
 import os
 import sqlite3
 from contextlib import asynccontextmanager
+from typing import Any, get_args, get_origin
 
 import typer
 from fastmcp import FastMCP
+from pydantic import BaseModel
+from rich import box
 from rich.console import Console
-from rich.syntax import Syntax
+from rich.table import Table
 
-from rememble.config import RemembleConfig, loadConfig
+from rememble.config import ChunkingConfig, RAGConfig, RemembleConfig, SearchConfig, loadConfig
 from rememble.db import (
     addObservation,
     addRelation,
@@ -453,6 +456,92 @@ def resource_memory(memory_id: str) -> dict:
 
 
 # ============================================================
+# Config CLI helpers
+# ============================================================
+
+
+def _fmtVal(v: Any) -> str:
+    if v is None:
+        return "[dim](not set)[/dim]"
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    return str(v)
+
+
+def _annStr(ann: Any) -> str:
+    """Return a simple string representation of a type annotation."""
+    args = get_args(ann)
+    if args:
+        non_none = [a for a in args if a is not type(None)]
+        has_none = type(None) in args
+        base = non_none[0] if non_none else args[0]
+        name = getattr(base, "__name__", str(base))
+        return f"{name} | None" if has_none else name
+    return getattr(ann, "__name__", str(ann))
+
+
+def _unwrapModel(ann: Any) -> type[BaseModel] | None:
+    """Extract a BaseModel subclass from Optional[X] / Union[X, None]."""
+    if isinstance(ann, type) and issubclass(ann, BaseModel):
+        return ann
+    for arg in get_args(ann):
+        if isinstance(arg, type) and issubclass(arg, BaseModel):
+            return arg
+    return None
+
+
+def _getFieldAnnotation(dotpath: str) -> Any:
+    """Walk model fields for dotpath, return annotation or None."""
+    parts = dotpath.split(".")
+    model: type[BaseModel] = RemembleConfig
+    for part in parts[:-1]:
+        f = model.model_fields.get(part)
+        if f is None:
+            return None
+        model = _unwrapModel(f.annotation)
+        if model is None:
+            return None
+    f = model.model_fields.get(parts[-1])
+    return f.annotation if f else None
+
+
+def _coerceTyped(value: str, annotation: Any) -> Any:
+    """Coerce string value using the field annotation."""
+    origin = get_origin(annotation)
+    args = get_args(annotation) if origin else ()
+    types = [a for a in args if a is not type(None)] if args else [annotation]
+    base = types[0] if types else str
+
+    if value.lower() in ("none", "null") and type(None) in (args or []):
+        return None
+    if base is bool:
+        if value.lower() in ("true", "yes", "1"):
+            return True
+        if value.lower() in ("false", "no", "0"):
+            return False
+        raise ValueError(f"Expected bool, got {value!r}")
+    if base is int:
+        return int(value)
+    if base is float:
+        return float(value)
+    return value
+
+
+def _renderConfigSection(title: str, pairs: list[tuple[str, Any, Any]]) -> None:
+    """Print a section with title + key/value table. pairs = (key, value, default)."""
+    _console.print(f"\n[bold]{title}[/bold]")
+    t = Table(show_header=False, box=box.SIMPLE, padding=(0, 1))
+    t.add_column("key", style="dim")
+    t.add_column("val")
+    for key, val, default in pairs:
+        fmt = _fmtVal(val)
+        if val != default:
+            fmt = f"[yellow]{fmt}[/yellow]"
+        t.add_row(key, fmt)
+    _console.print(t)
+
+
+# ============================================================
 # CLI (typer)
 # ============================================================
 
@@ -477,54 +566,123 @@ def _default(ctx: typer.Context) -> None:
 
 
 @_cli.command()
-def setup() -> None:
+def setup(
+    provider: str | None = typer.Option(
+        None, "--provider", help="Provider slug: ollama|openai|openrouter|cohere"
+    ),
+    api_key: str | None = typer.Option(None, "--api-key", help="API key (skips prompt)"),
+    model: str | None = typer.Option(None, "--model", help="Model name (skips prompt)"),
+    agents: str | None = typer.Option(
+        None, "--agents", help="Comma-sep agent slugs, e.g. claude-code,cursor"
+    ),
+    yes: bool = typer.Option(
+        False, "--yes", help="Skip agent install prompts (install all selected)"
+    ),
+    format: str = typer.Option("human", "--format", "-f", help="Output format: human|json"),
+) -> None:
     """Interactive setup wizard — configure embedding and AI agents."""
+    if format not in ("human", "json"):
+        raise typer.BadParameter(f"Invalid format {format!r}; choose human or json")
     from rememble.setup import runSetup
 
-    runSetup()
+    runSetup(provider=provider, api_key=api_key, model=model, agents=agents, yes=yes, format=format)
 
 
 @_cli.command()
-def uninstall() -> None:
+def uninstall(
+    yes: bool = typer.Option(False, "--yes", help="Skip DB deletion prompt (assume yes)"),
+    format: str = typer.Option("human", "--format", "-f", help="Output format: human|json"),
+) -> None:
     """Remove rememble MCP entries and instructions from all agent configs."""
+    if format not in ("human", "json"):
+        raise typer.BadParameter(f"Invalid format {format!r}; choose human or json")
     from rememble.setup import runUninstall
 
-    runUninstall()
+    runUninstall(yes=yes, format=format)
 
 
 @_config_cli.command("list")
-def config_list() -> None:
-    """Pretty-print the current config."""
-    from rememble.config import loadConfig
+def config_list(
+    format: str = typer.Option("human", "--format", "-f", help="Output format: human|json"),
+) -> None:
+    """Pretty-print the current config grouped by section."""
+    if format not in ("human", "json"):
+        raise typer.BadParameter(f"Invalid format {format!r}; choose human or json")
+    cfg = loadConfig()
 
-    _console.print(Syntax(loadConfig().model_dump_json(indent=2), "json"))
+    if format == "json":
+        print(json.dumps(cfg.model_dump()))
+        raise typer.Exit()
+
+    defaults = RemembleConfig()
+    d = cfg.model_dump()
+    dd = defaults.model_dump()
+
+    embedding_keys = [
+        "db_path",
+        "embedding_api_url",
+        "embedding_api_key",
+        "embedding_api_model",
+        "embedding_dimensions",
+    ]
+    _renderConfigSection("Embedding", [(k, d[k], dd[k]) for k in embedding_keys])
+
+    def _subPairs(cfg_sub: Any, def_sub: Any, model: Any) -> list[tuple[str, Any, Any]]:
+        return [(k, getattr(cfg_sub, k), getattr(def_sub, k)) for k in model.model_fields]
+
+    _renderConfigSection("Search", _subPairs(cfg.search, defaults.search, SearchConfig))
+    _renderConfigSection("RAG", _subPairs(cfg.rag, defaults.rag, RAGConfig))
+    _renderConfigSection("Chunking", _subPairs(cfg.chunking, defaults.chunking, ChunkingConfig))
 
 
 @_config_cli.command("get")
 def config_get(
-    dotpath: str = typer.Argument(help="Dot-separated key, e.g. embedding_api_url"),
+    dotpath: str = typer.Argument(help="Dot-separated key, e.g. search.rrf_k"),
+    format: str = typer.Option("human", "--format", "-f", help="Output format: human|json"),
 ) -> None:
     """Get a single config value."""
-    from rememble.config import loadConfig
-
-    node = loadConfig().model_dump()
+    if format not in ("human", "json"):
+        raise typer.BadParameter(f"Invalid format {format!r}; choose human or json")
+    node: Any = loadConfig().model_dump()
     for part in dotpath.split("."):
         if isinstance(node, dict) and part in node:
             node = node[part]
         else:
-            _console.print(f"[red]Key not found:[/red] {dotpath}")
+            if format == "json":
+                print(json.dumps({"ok": False, "error": f"Key not found: {dotpath}"}))
+            else:
+                _console.print(f"[red]Key not found:[/red] {dotpath}")
             raise typer.Exit(1)
-    _console.print(node)
+    ann = _getFieldAnnotation(dotpath)
+    if format == "json":
+        print(
+            json.dumps({"key": dotpath, "value": node, "type": _annStr(ann) if ann else "unknown"})
+        )
+    else:
+        type_hint = f"  [dim]({_annStr(ann)})[/dim]" if ann else ""
+        _console.print(f"[bold]{dotpath}[/bold] = {_fmtVal(node)}{type_hint}")
 
 
 @_config_cli.command("set")
 def config_set(
     dotpath: str = typer.Argument(help="Dot-separated key path"),
-    value: str = typer.Argument(help="Value (auto-coerced to int/float/bool)"),
+    value: str = typer.Argument(help="Value (type-coerced via schema)"),
+    format: str = typer.Option("human", "--format", "-f", help="Output format: human|json"),
 ) -> None:
     """Set a config value."""
-    from rememble.config import CONFIG_PATH, RemembleConfig
-    from rememble.setup import _coerceValue
+    if format not in ("human", "json"):
+        raise typer.BadParameter(f"Invalid format {format!r}; choose human or json")
+    from rememble.config import CONFIG_PATH
+
+    ann = _getFieldAnnotation(dotpath)
+    try:
+        coerced = _coerceTyped(value, ann) if ann else value
+    except ValueError as e:
+        if format == "json":
+            print(json.dumps({"ok": False, "error": str(e)}))
+        else:
+            _console.print(f"[red]Invalid:[/red] {e}")
+        raise typer.Exit(1) from e
 
     raw: dict = {}
     if CONFIG_PATH.exists():
@@ -537,17 +695,23 @@ def config_set(
         if part not in node or not isinstance(node[part], dict):
             node[part] = {}
         node = node[part]
-    node[parts[-1]] = _coerceValue(value)
+    node[parts[-1]] = coerced
 
     try:
         RemembleConfig(**raw)
     except Exception as e:
-        _console.print(f"[red]Invalid value:[/red] {e}")
+        if format == "json":
+            print(json.dumps({"ok": False, "error": str(e)}))
+        else:
+            _console.print(f"[red]Invalid value:[/red] {e}")
         raise typer.Exit(1) from e
 
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     CONFIG_PATH.write_text(json.dumps(raw, indent=2) + "\n")
-    _console.print(f"[green]Set[/green] {dotpath} = {_coerceValue(value)!r}")
+    if format == "json":
+        print(json.dumps({"ok": True, "key": dotpath, "value": coerced}))
+    else:
+        _console.print(f"[green]Set[/green] {dotpath} = {coerced!r}")
 
 
 def main() -> None:
