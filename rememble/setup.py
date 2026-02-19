@@ -235,10 +235,7 @@ def _configWizard(
                 questionary.Choice(title=f"{label}  ({url})", value=i)
                 for i, (label, url, _, _) in enumerate(_PROVIDERS)
             ],
-            default=questionary.Choice(
-                title=f"{_PROVIDERS[default_provider][0]}  ({_PROVIDERS[default_provider][1]})",
-                value=default_provider,
-            ),
+            default=default_provider,  # type: ignore[arg-type]  # questionary stubs too narrow
         ).ask()
         if provider_idx is None:
             return None  # ctrl-c
@@ -288,10 +285,7 @@ def _configWizard(
                 questionary.Choice(title=f"{m}  ({dims} dims)", value=(m, dims))
                 for m, dims in models
             ],
-            default=questionary.Choice(
-                title=f"{models[default_model][0]}  ({models[default_model][1]} dims)",
-                value=models[default_model],
-            ),
+            default=models[default_model],  # type: ignore[arg-type]
         ).ask()
         if model_result is None:
             return None  # ctrl-c
