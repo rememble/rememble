@@ -498,9 +498,10 @@ def _getFieldAnnotation(dotpath: str) -> Any:
         f = model.model_fields.get(part)
         if f is None:
             return None
-        model = _unwrapModel(f.annotation)
-        if model is None:
+        unwrapped = _unwrapModel(f.annotation)
+        if unwrapped is None:
             return None
+        model = unwrapped
     f = model.model_fields.get(parts[-1])
     return f.annotation if f else None
 
