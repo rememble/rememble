@@ -23,7 +23,7 @@ def config(tmp_db_path: str) -> RemembleConfig:
 
 @pytest.fixture
 def db(config: RemembleConfig) -> sqlite3.Connection:
-    conn = connect(config)
+    conn, _ = connect(config)
     yield conn
     conn.close()
 

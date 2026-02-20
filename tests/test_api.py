@@ -17,7 +17,7 @@ from tests.conftest import FakeEmbedder
 @pytest.fixture
 def api_db(config: RemembleConfig) -> sqlite3.Connection:
     """DB with check_same_thread=False for TestClient cross-thread access."""
-    conn = connect(config, check_same_thread=False)
+    conn, _ = connect(config, check_same_thread=False)
     yield conn
     conn.close()
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import time
 from pathlib import Path
@@ -12,10 +13,19 @@ from sqlite_vec import serialize_float32
 from rememble.config import RemembleConfig
 
 SCHEMA_VERSION = 1
+logger = logging.getLogger("rememble")
 
 
-def connect(config: RemembleConfig, check_same_thread: bool = True) -> sqlite3.Connection:
-    """Open DB, load sqlite-vec, run migrations."""
+def connect(
+    config: RemembleConfig,
+    *,
+    dimensions: int | None = None,
+    check_same_thread: bool = True,
+) -> tuple[sqlite3.Connection, bool]:
+    """Open DB, load sqlite-vec, run migrations.
+
+    Returns (connection, needs_reembed) — caller must re-embed if True.
+    """
     db_path = Path(config.db_path).expanduser()
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -29,12 +39,13 @@ def connect(config: RemembleConfig, check_same_thread: bool = True) -> sqlite3.C
     sqlite_vec.load(db)
     db.enable_load_extension(False)
 
-    _migrate(db, config.embedding_dimensions)
-    return db
+    dims = dimensions or config.embedding_dimensions
+    needs_reembed = _migrate(db, dims)
+    return db, needs_reembed
 
 
-def _migrate(db: sqlite3.Connection, dimensions: int) -> None:
-    """Create tables if they don't exist."""
+def _migrate(db: sqlite3.Connection, dimensions: int) -> bool:
+    """Create tables if they don't exist. Returns True if re-embedding needed."""
     db.executescript("""
         -- Core memories table
         CREATE TABLE IF NOT EXISTS memories (
@@ -119,6 +130,22 @@ def _migrate(db: sqlite3.Connection, dimensions: int) -> None:
         CREATE INDEX IF NOT EXISTS idx_memories_accessed ON memories(accessed_at);
     """)
 
+    # Meta table for tracking settings across restarts
+    db.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
+
+    # Detect dimension mismatch — vec_memories is locked to the dimension it was created with
+    stored = db.execute("SELECT value FROM meta WHERE key = 'vec_dimensions'").fetchone()
+    stored_dims = int(stored[0]) if stored else None
+    needs_reembed = False
+
+    if stored_dims is not None and stored_dims != dimensions:
+        logger.info(
+            "Embedding dims changed (%d → %d), rebuilding vec_memories",
+            stored_dims, dimensions,
+        )
+        db.execute("DROP TABLE IF EXISTS vec_memories")
+        needs_reembed = True
+
     # sqlite-vec virtual table (can't be in executescript due to extension)
     db.execute(f"""
         CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(
@@ -127,7 +154,12 @@ def _migrate(db: sqlite3.Connection, dimensions: int) -> None:
             created_at INTEGER
         )
     """)
+    db.execute(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES ('vec_dimensions', ?)",
+        (str(dimensions),),
+    )
     db.commit()
+    return needs_reembed
 
 
 # -- Memory CRUD --
