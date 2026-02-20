@@ -1,15 +1,18 @@
 # Rememble
 
-Local-first memory server with hybrid search, knowledge graph, and RAG context assembly.
+Local-first MCP memory server with hybrid search, knowledge graph, and RAG context assembly.
 
 SQLite + sqlite-vec + FTS5 backend. Works with any MCP client.
 
 ## Features
 
-- Hybrid search: BM25 + vector KNN + temporal scoring (RRF fusion)
-- Knowledge graph: entities, observations, relations
-- Token-budgeted RAG context assembly
-- Multiple embedding providers: Ollama, local (sentence-transformers), OpenAI-compat
+- **Hybrid search** — BM25 full-text + vector KNN + temporal scoring, fused with RRF
+- **Knowledge graph** — entities, observations, relations with fuzzy search
+- **RAG context** — token-budgeted context assembly with expansion + snippets
+- **Auto-chunking** — long text split with sliding window overlap
+- **Multiple providers** — Ollama, OpenAI, OpenRouter, Cohere (any OpenAI-compatible API)
+- **Auto-dimension detection** — probes provider at startup, migrates DB automatically on change
+- **Setup wizard** — auto-detects and configures Claude Code, Claude Desktop, Cursor, Windsurf, OpenCode, Codex
 
 ## Install
 
@@ -23,86 +26,137 @@ Upgrade:
 uv tool upgrade rememble
 ```
 
-## MCP Client Setup
+## Quick Start
 
-### Claude Code / Claude Desktop
+```bash
+rememble setup
+```
 
-```json
-{
-  "mcpServers": {
-    "rememble": {
-      "command": "rememble"
-    }
-  }
-}
+The setup wizard will:
+
+1. **Configure embeddings** — pick a provider (Ollama, OpenAI, OpenRouter, Cohere) and model
+2. **Configure agents** — auto-detect installed AI agents and register rememble as an MCP server
+
+Non-interactive:
+
+```bash
+rememble setup --provider cohere --api-key YOUR_KEY --model embed-english-v3.0 --agents claude-code --yes
+```
+
+Provider slugs: `ollama`, `openai`, `openrouter`, `cohere`
+Agent slugs: `claude-code`, `claude-desktop`, `opencode`, `codex`, `cursor`, `windsurf`
+
+## MCP Tools
+
+Once configured, your AI agent gets these tools:
+
+| Tool | Description |
+|------|-------------|
+| `remember` | Store a memory (auto-chunks, embeds, indexes) |
+| `recall` | Semantic search with RAG context assembly |
+| `forget` | Soft-delete a memory |
+| `list_memories` | Browse memories with filters |
+| `memory_stats` | DB statistics and provider info |
+| `create_entities` | Create knowledge graph entities with observations |
+| `create_relations` | Link entities in the knowledge graph |
+| `add_observations` | Add facts to existing entities |
+| `search_graph` | Search entities and observations |
+| `delete_entities` | Remove entities (cascades to relations) |
+
+## CLI
+
+Rememble also has a CLI that talks to the HTTP API server:
+
+```bash
+rememble serve -d                   # start HTTP server as daemon
+rememble remember "project uses uv" --source manual --tags tools
+rememble recall "what tools does the project use"
+rememble list --source manual
+rememble stats
+rememble forget 42
+rememble entity create --name Python --type language
+rememble graph search "Python"
+rememble stop                       # stop daemon
 ```
 
 ## Configuration
 
-Config file: `~/.rememble/config.json` (auto-created on first run).
+Config: `~/.rememble/config.json` (created by `rememble setup` or on first run).
 
-All fields can be overridden via env vars with `REMEMBLE_` prefix and `__` as nested delimiter.
+```bash
+rememble config list                # show all config
+rememble config get search.rrf_k    # get a value
+rememble config set search.rrf_k 80 # set a value
+```
 
-| Env var | Default | Description |
-|---------|---------|-------------|
-| `REMEMBLE_DB_PATH` | `~/.rememble/memory.db` | SQLite database path |
-| `REMEMBLE_EMBEDDING__PROVIDER` | `ollama` | `ollama` \| `local` \| `compat` |
-| `REMEMBLE_EMBEDDING__MODEL` | `nomic-embed-text` | Model name for active provider |
-| `REMEMBLE_EMBEDDING__DIMENSIONS` | `768` | Embedding dimensions |
-| `REMEMBLE_EMBEDDING__OLLAMA_URL` | `http://localhost:11434` | Ollama base URL |
-| `REMEMBLE_EMBEDDING__API_TYPE` | `openrouter` | Label for compat provider (logging only) |
-| `REMEMBLE_EMBEDDING__API_ENDPOINT` | `https://openrouter.ai/api/v1` | OpenAI-compat base URL |
-| `REMEMBLE_EMBEDDING__API_KEY` | — | API key (or set `OPENROUTER_API_KEY` / `OPENAI_API_KEY`) |
+All fields support env var overrides with `REMEMBLE_` prefix:
+
+| Key | Env var | Default | Description |
+|-----|---------|---------|-------------|
+| `embedding_api_url` | `REMEMBLE_EMBEDDING_API_URL` | `http://localhost:11434/v1` | Embedding API endpoint |
+| `embedding_api_key` | `REMEMBLE_EMBEDDING_API_KEY` | — | API key |
+| `embedding_api_model` | `REMEMBLE_EMBEDDING_API_MODEL` | `nomic-embed-text` | Model name |
+| `embedding_dimensions` | `REMEMBLE_EMBEDDING_DIMENSIONS` | `768` | Fallback dimensions (auto-detected at startup) |
+| `port` | `REMEMBLE_PORT` | `7707` | HTTP server port |
+
+Sub-configs (`search.*`, `rag.*`, `chunking.*`) are available via `rememble config list`.
 
 ## Embedding Providers
 
-### Ollama (default)
-```json
-{ "embedding": { "provider": "ollama", "model": "nomic-embed-text", "dimensions": 768 } }
-```
+### Ollama (default, local)
 
-### Local (sentence-transformers, no network)
 ```bash
-uv sync --extra local
-```
-```json
-{ "embedding": { "provider": "local" } }
+rememble setup --provider ollama --model nomic-embed-text
 ```
 
-### OpenAI-compat (OpenRouter, OpenAI, Cohere compat, etc.)
+Models: `nomic-embed-text` (768d), `mxbai-embed-large` (1024d), `all-minilm` (384d), `bge-large` (1024d), `snowflake-arctic-embed` (1024d)
 
-**OpenRouter:**
-```json
-{
-  "embedding": {
-    "provider": "compat",
-    "api_type": "openrouter",
-    "api_endpoint": "https://openrouter.ai/api/v1",
-    "model": "openai/text-embedding-3-small",
-    "dimensions": 1536
-  }
-}
+### OpenAI
+
+```bash
+rememble setup --provider openai --api-key sk-... --model text-embedding-3-small
 ```
 
-**Cohere via OpenAI compat API:**
-```json
-{
-  "embedding": {
-    "provider": "compat",
-    "api_type": "cohere",
-    "api_endpoint": "https://api.cohere.com/compatibility/v1",
-    "model": "embed-english-light-v3.0",
-    "dimensions": 384
-  }
-}
+### OpenRouter
+
+```bash
+rememble setup --provider openrouter --api-key sk-or-... --model openai/text-embedding-3-small
 ```
 
-Set `REMEMBLE_EMBEDDING__API_KEY` or `OPENROUTER_API_KEY` / `OPENAI_API_KEY` env var.
+### Cohere
+
+```bash
+rememble setup --provider cohere --api-key ... --model embed-english-v3.0
+```
+
+Dimensions are auto-detected from the provider at startup. If you switch providers, the DB migrates automatically (re-embeds all existing memories).
+
+## Docker
+
+```bash
+docker compose up
+```
+
+Mounts `~/.rememble` as `/data`. Runs the HTTP API server on port 7707.
 
 ## Development
 
 ```bash
-make dev      # install deps
+make dev      # install deps (all extras)
 make test     # run tests
+make lint     # ruff + basedpyright
+make fmt      # format + fix imports
 make check    # fmt + lint + test
 ```
+
+## Uninstall
+
+```bash
+rememble uninstall
+```
+
+Removes MCP entries and instructions from all configured agents. Optionally deletes `~/.rememble/` (database + config).
+
+## License
+
+MIT

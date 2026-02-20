@@ -141,7 +141,8 @@ def _migrate(db: sqlite3.Connection, dimensions: int) -> bool:
     if stored_dims is not None and stored_dims != dimensions:
         logger.info(
             "Embedding dims changed (%d → %d), rebuilding vec_memories",
-            stored_dims, dimensions,
+            stored_dims,
+            dimensions,
         )
         db.execute("DROP TABLE IF EXISTS vec_memories")
         needs_reembed = True

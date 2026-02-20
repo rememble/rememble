@@ -345,8 +345,16 @@ def _setupClaudeCode() -> str:
     try:
         result = subprocess.run(
             [
-                "claude", "mcp", "add", "--scope", "user",
-                "rememble", "--", "rememble", "serve", "--mcp",
+                "claude",
+                "mcp",
+                "add",
+                "--scope",
+                "user",
+                "rememble",
+                "--",
+                "rememble",
+                "serve",
+                "--mcp",
             ],
             capture_output=True,
             text=True,
