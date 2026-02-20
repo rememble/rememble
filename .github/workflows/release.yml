@@ -51,6 +51,7 @@ jobs:
           git add pyproject.toml uv.lock
           git commit -m "chore(release): v${{ steps.bump.outputs.version }}"
           git tag "v${{ steps.bump.outputs.version }}"
+          git pull --rebase
           git push && git push --tags
 
       - name: Publish to PyPI
