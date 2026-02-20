@@ -8,7 +8,7 @@ import sqlite3
 import pytest
 
 # Import server module and patch globals for testing
-import rememble.server as srv
+import rememble.server.mcp as srv
 from rememble.config import RemembleConfig
 from rememble.db import (
     addObservation,

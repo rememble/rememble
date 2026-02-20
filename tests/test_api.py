@@ -7,7 +7,7 @@ import sqlite3
 import pytest
 from fastapi.testclient import TestClient
 
-import rememble.api as api_mod
+import rememble.server.api as api_mod
 from rememble.config import RemembleConfig
 from rememble.db import connect, insertMemory, upsertEntity
 from rememble.state import AppState

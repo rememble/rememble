@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Query
 
-from rememble.api_models import (
+from rememble.server.api_models import (
     AddObservationsRequest,
     CreateEntitiesRequest,
     CreateRelationsRequest,
