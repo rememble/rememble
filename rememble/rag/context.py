@@ -7,7 +7,7 @@ import sqlite3
 from rememble.config import RAGConfig, SearchConfig
 from rememble.ingest.chunker import countTokens, truncateToTokens
 from rememble.models import RAGContext, RAGItem
-from rememble.search.fusion import hybridSearch
+from rememble.search.fusion import HybridSearchResult, hybridSearch
 
 
 def buildContext(
@@ -16,24 +16,27 @@ def buildContext(
     query_embedding: list[float],
     search_config: SearchConfig,
     rag_config: RAGConfig,
+    precomputed: HybridSearchResult | None = None,
 ) -> RAGContext:
     """Build token-budgeted context from hybrid search results.
 
     Pipeline:
-    1. Hybrid search (overfetch: limit * 3)
+    1. Hybrid search (overfetch: limit * 3) — skipped if precomputed provided
     2. Expansion: full text of top result (capped at expansion_max_tokens)
     3. Snippets: preview text from remaining results (snippet_max_tokens each)
     4. Graph context: entity/observation text for matched entities
     5. Token budget: greedily fill until max_context_tokens
     """
-    # Overfetch for better candidate pool
-    search_result = hybridSearch(
-        db,
-        query,
-        query_embedding,
-        search_config,
-        limit=rag_config.max_snippets * 3,
-    )
+    if precomputed is not None:
+        search_result = precomputed
+    else:
+        search_result = hybridSearch(
+            db,
+            query,
+            query_embedding,
+            search_config,
+            limit=rag_config.max_snippets * 3,
+        )
 
     items: list[RAGItem] = []
     remaining_tokens = rag_config.max_context_tokens

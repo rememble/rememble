@@ -20,6 +20,7 @@ class SearchConfig(BaseModel):
     vector_weight: float = 0.5
     temporal_weight: float = 0.1
     recency_half_life_days: float = 7.0
+    bm25_shortcircuit_threshold: float = 0.9
 
 
 class RAGConfig(BaseModel):
@@ -32,6 +33,7 @@ class RAGConfig(BaseModel):
 class ChunkingConfig(BaseModel):
     target_tokens: int = 400
     overlap_tokens: int = 40
+    markdown_aware: bool = True
 
 
 class RemembleConfig(BaseSettings):

@@ -74,6 +74,18 @@ class TestSvcRemember:
         assert meta["key"] == "value"
 
 
+class SpyEmbedder(FakeEmbedder):
+    """FakeEmbedder that tracks embedOne calls."""
+
+    def __init__(self, dimensions: int = 4):
+        super().__init__(dimensions)
+        self.embed_one_calls: int = 0
+
+    async def embedOne(self, text: str) -> list[float]:
+        self.embed_one_calls += 1
+        return await super().embedOne(text)
+
+
 class TestSvcRecall:
     @pytest.mark.asyncio
     async def test_recallWithRag(self, state, db, fake_embedder):
@@ -97,6 +109,50 @@ class TestSvcRecall:
     async def test_recallEmptyDb(self, state):
         result = await svcRecall(state, "nothing", limit=5, use_rag=True)
         assert result["total_tokens"] == 0
+
+    @pytest.mark.asyncio
+    async def test_shortCircuitSkipsEmbedding(self, config, db):
+        """When BM25 top score >= threshold, embedOne should NOT be called."""
+        spy = SpyEmbedder(dimensions=4)
+        s = AppState(db=db, embedder=spy, config=config)
+        # Insert several docs so BM25 IDF has discriminative power
+        for i in range(10):
+            emb = await spy.embedOne(f"filler document number {i}")
+            insertMemory(db, f"filler document number {i} about various topics", emb)
+        emb = await spy.embedOne("unique keyword xylophone")
+        insertMemory(db, "unique keyword xylophone is here", emb, source="test")
+        # Probe to find actual BM25 score
+        from rememble.search.fusion import bm25Probe
+
+        top_score, _ = bm25Probe(db, "xylophone", config.search, 5)
+        # Set threshold just below the actual score
+        config = config.model_copy(
+            update={
+                "search": config.search.model_copy(
+                    update={"bm25_shortcircuit_threshold": top_score * 0.5}
+                )
+            }
+        )
+        s = AppState(db=db, embedder=spy, config=config)
+        spy.embed_one_calls = 0  # reset after setup
+
+        await svcRecall(s, "xylophone", limit=5, use_rag=False)
+        assert spy.embed_one_calls == 0
+
+    @pytest.mark.asyncio
+    async def test_disabledThresholdAlwaysEmbeds(self, config, db):
+        """When threshold=1.0 (disabled), embedOne should always be called."""
+        spy = SpyEmbedder(dimensions=4)
+        config = config.model_copy(
+            update={"search": config.search.model_copy(update={"bm25_shortcircuit_threshold": 1.0})}
+        )
+        s = AppState(db=db, embedder=spy, config=config)
+        emb = await spy.embedOne("unique keyword xylophone")
+        spy.embed_one_calls = 0
+        insertMemory(db, "unique keyword xylophone is here", emb, source="test")
+
+        await svcRecall(s, "xylophone", limit=5, use_rag=False)
+        assert spy.embed_one_calls == 1
 
 
 class TestSvcForget:

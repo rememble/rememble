@@ -18,7 +18,7 @@ from rememble.db import (
 )
 from rememble.ingest.chunker import chunkText, countTokens
 from rememble.rag.context import buildContext
-from rememble.search.fusion import hybridSearch
+from rememble.search.fusion import bm25Probe, hybridSearch, hybridSearchTextOnly
 from rememble.search.graph import graphSearch
 from rememble.state import AppState
 
@@ -34,7 +34,8 @@ async def svcRemember(
 ) -> dict:
     """Store a memory. Auto-chunks, embeds, indexes."""
     cfg = state.config
-    chunks = chunkText(content, cfg.chunking.target_tokens, cfg.chunking.overlap_tokens)
+    c = cfg.chunking
+    chunks = chunkText(content, c.target_tokens, c.overlap_tokens, c.markdown_aware)
     ids: list[int] = []
 
     for i, chunk in enumerate(chunks):
@@ -72,9 +73,46 @@ async def svcRecall(
     limit: int = 10,
     use_rag: bool = True,
 ) -> dict:
-    """Search memories by semantic similarity."""
-    query_embedding = await state.embedder.embedOne(query)
+    """Search memories by semantic similarity. Uses BM25 probe to short-circuit embedding."""
     cfg = state.config
+    threshold = cfg.search.bm25_shortcircuit_threshold
+
+    # Phase 1: BM25 probe
+    top_score, text_results = bm25Probe(state.db, query, cfg.search, limit)
+
+    if top_score >= threshold and threshold < 1.0:
+        # Short-circuit: skip embedding, fuse BM25 + temporal + graph only
+        hybrid = hybridSearchTextOnly(state.db, query, text_results, cfg.search, limit)
+        if use_rag:
+            context = buildContext(state.db, query, [], cfg.search, cfg.rag, precomputed=hybrid)
+            return {
+                "query": context.query,
+                "total_tokens": context.total_tokens,
+                "items": [item.model_dump() for item in context.items],
+                "entities": [
+                    {
+                        "name": e.entity.name,
+                        "type": e.entity.entity_type,
+                        "observations": [o.content for o in e.observations],
+                    }
+                    for e in context.entities
+                ],
+            }
+        return {
+            "query": query,
+            "results": [r.model_dump() for r in hybrid.results[:limit]],
+            "graph": [
+                {
+                    "name": g.entity.name,
+                    "type": g.entity.entity_type,
+                    "observations": [o.content for o in g.observations],
+                }
+                for g in hybrid.graph
+            ],
+        }
+
+    # Phase 2: full path (embed + vector + text + temporal + graph)
+    query_embedding = await state.embedder.embedOne(query)
 
     if use_rag:
         context = buildContext(state.db, query, query_embedding, cfg.search, cfg.rag)
