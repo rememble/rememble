@@ -7,27 +7,78 @@ import sqlite3
 
 from rememble.models import SearchResult
 
+_FTS5_OPERATORS = {"AND", "OR", "NOT", "NEAR"}
 
-def _sanitizeFtsQuery(query: str) -> str:
-    """Sanitize query for FTS5 MATCH. Quotes tokens, strips special chars."""
-    # Remove FTS5 operators and special characters
-    cleaned = re.sub(r"[^\w\s]", " ", query)
-    tokens = cleaned.split()
-    if not tokens:
+
+def _normalizeBm25(rank: float) -> float:
+    """Map BM25 rank to [0, 1). Monotonic — ranking unchanged."""
+    raw = abs(rank)
+    return raw / (1.0 + raw)
+
+
+def buildFts5Query(query: str) -> str:
+    """Build FTS5 MATCH expression supporting phrases, negation, operator stripping.
+
+    - "exact phrase" → passed through
+    - -term → NOT
+    - AND/OR/NOT/NEAR stripped from bare terms
+    - Bare tokens sanitized and AND-joined
+    """
+    negative: list[str] = []
+
+    # Extract quoted phrases first, then process remaining tokens
+    parts: list[str] = []
+    remaining = query
+    for m in re.finditer(r'"([^"]*)"', query):
+        phrase = m.group(1).strip()
+        if phrase:
+            parts.append(f'"{phrase}"')
+    # Remove quoted parts from remaining
+    remaining = re.sub(r'"[^"]*"', " ", remaining)
+
+    for token in remaining.split():
+        if token.startswith("-") and len(token) > 1:
+            clean = re.sub(r"[^\w]", "", token[1:])
+            if clean and clean.upper() not in _FTS5_OPERATORS:
+                negative.append(f'"{clean}"')
+        else:
+            clean = re.sub(r"[^\w]", "", token)
+            if clean and clean.upper() not in _FTS5_OPERATORS:
+                parts.append(f'"{clean}"')
+
+    if not parts and not negative:
         return '""'
-    # Quote each token and AND-join
-    quoted = [f'"{t}"' for t in tokens if t.strip()]
-    return " ".join(quoted)
+
+    # AND-join positive terms + phrases
+    expr = " ".join(parts) if parts else '""'
+
+    # Chain negation: ((pos) NOT neg1) NOT neg2
+    for neg in negative:
+        expr = f"({expr}) NOT {neg}"
+
+    return expr
 
 
 def _orQuery(query: str) -> str:
     """Build an OR-expanded FTS5 query as fallback."""
-    cleaned = re.sub(r"[^\w\s]", " ", query)
-    tokens = cleaned.split()
-    if not tokens:
+    positive: list[str] = []
+
+    for m in re.finditer(r'"([^"]*)"', query):
+        phrase = m.group(1).strip()
+        if phrase:
+            positive.append(f'"{phrase}"')
+    remaining = re.sub(r'"[^"]*"', " ", query)
+
+    for token in remaining.split():
+        if token.startswith("-"):
+            continue
+        clean = re.sub(r"[^\w]", "", token)
+        if clean and clean.upper() not in _FTS5_OPERATORS:
+            positive.append(f'"{clean}"')
+
+    if not positive:
         return '""'
-    quoted = [f'"{t}"' for t in tokens if t.strip()]
-    return " OR ".join(quoted)
+    return " OR ".join(positive)
 
 
 def textSearch(
@@ -36,7 +87,7 @@ def textSearch(
     limit: int = 20,
 ) -> list[SearchResult]:
     """FTS5 BM25 search. Returns results with snippet previews."""
-    fts_query = _sanitizeFtsQuery(query)
+    fts_query = buildFts5Query(query)
 
     try:
         rows = db.execute(
@@ -64,8 +115,7 @@ def textSearch(
 
     results = []
     for row in rows:
-        # BM25 rank is negative (lower = better), flip to positive higher = better
-        score = -row["rank"]
+        score = _normalizeBm25(row["rank"])
         results.append(
             SearchResult(
                 memory_id=row["memory_id"],
