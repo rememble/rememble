@@ -1,10 +1,8 @@
-"""FastAPI HTTP API — routes calling the shared service layer."""
+"""REST API routes — mounted under /api by the combined app."""
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
-
-from fastapi import FastAPI, Query
+from fastapi import APIRouter, Query
 
 from rememble.server.api_models import (
     AddObservationsRequest,
@@ -27,32 +25,15 @@ from rememble.service import (
     svcRemember,
     svcSearchGraph,
 )
-from rememble.state import AppState, createAppState
+from rememble.state import getState
 
-_state: AppState | None = None
-
-
-def _getState() -> AppState:
-    assert _state is not None, "AppState not initialized"
-    return _state
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    global _state
-    _state = await createAppState(check_same_thread=False)
-    yield
-    if _state and _state.db:
-        _state.db.close()
-
-
-app = FastAPI(title="Rememble", lifespan=lifespan)
+router = APIRouter()
 
 
 # ── Health ───────────────────────────────────────────────────
 
 
-@app.get("/health")
+@router.get("/health")
 async def health():
     return {"status": "ok"}
 
@@ -60,22 +41,22 @@ async def health():
 # ── Core Memory ──────────────────────────────────────────────
 
 
-@app.post("/remember")
+@router.post("/remember")
 async def api_remember(req: RememberRequest):
-    return await svcRemember(_getState(), req.content, req.source, req.tags, req.metadata)
+    return await svcRemember(getState(), req.content, req.source, req.tags, req.metadata)
 
 
-@app.post("/recall")
+@router.post("/recall")
 async def api_recall(req: RecallRequest):
-    return await svcRecall(_getState(), req.query, req.limit, req.use_rag)
+    return await svcRecall(getState(), req.query, req.limit, req.use_rag)
 
 
-@app.post("/forget")
+@router.post("/forget")
 async def api_forget(req: ForgetRequest):
-    return await svcForget(_getState(), req.memory_id)
+    return await svcForget(getState(), req.memory_id)
 
 
-@app.get("/memories")
+@router.get("/memories")
 async def api_list_memories(
     source: str | None = Query(None),
     tags: str | None = Query(None),
@@ -83,42 +64,42 @@ async def api_list_memories(
     limit: int = Query(20),
     offset: int = Query(0),
 ):
-    return await svcListMemories(_getState(), source, tags, status, limit, offset)
+    return await svcListMemories(getState(), source, tags, status, limit, offset)
 
 
-@app.get("/stats")
+@router.get("/stats")
 async def api_stats():
-    return await svcMemoryStats(_getState())
+    return await svcMemoryStats(getState())
 
 
 # ── Knowledge Graph ──────────────────────────────────────────
 
 
-@app.post("/entities")
+@router.post("/entities")
 async def api_create_entities(req: CreateEntitiesRequest):
     entities = [e.model_dump() for e in req.entities]
-    return await svcCreateEntities(_getState(), entities)
+    return await svcCreateEntities(getState(), entities)
 
 
-@app.post("/relations")
+@router.post("/relations")
 async def api_create_relations(req: CreateRelationsRequest):
     relations = [r.model_dump() for r in req.relations]
-    return await svcCreateRelations(_getState(), relations)
+    return await svcCreateRelations(getState(), relations)
 
 
-@app.post("/observations")
+@router.post("/observations")
 async def api_add_observations(req: AddObservationsRequest):
-    return await svcAddObservations(_getState(), req.entity_name, req.observations, req.source)
+    return await svcAddObservations(getState(), req.entity_name, req.observations, req.source)
 
 
-@app.get("/graph")
+@router.get("/graph")
 async def api_search_graph(
     query: str = Query(...),
     limit: int = Query(10),
 ):
-    return await svcSearchGraph(_getState(), query, limit)
+    return await svcSearchGraph(getState(), query, limit)
 
 
-@app.delete("/entities")
+@router.delete("/entities")
 async def api_delete_entities(req: DeleteEntitiesRequest):
-    return await svcDeleteEntities(_getState(), req.names)
+    return await svcDeleteEntities(getState(), req.names)

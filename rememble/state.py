@@ -1,4 +1,4 @@
-"""Application state container — replaces scattered globals."""
+"""Application state container — singleton shared by MCP + REST."""
 
 from __future__ import annotations
 
@@ -18,6 +18,10 @@ logger = logging.getLogger("rememble")
 
 DEFAULT_PORT = 7707
 
+# ── Singleton ────────────────────────────────────────────────
+
+_state: AppState | None = None
+
 
 @dataclass(frozen=True)
 class AppState:
@@ -27,10 +31,45 @@ class AppState:
     port: int = field(default=DEFAULT_PORT)
 
 
+def getState() -> AppState:
+    """Return current state or raise if not initialised."""
+    assert _state is not None, "AppState not initialized — call initState() first"
+    return _state
+
+
+def isInitialized() -> bool:
+    return _state is not None
+
+
+async def initState(
+    config: RemembleConfig | None = None,
+    port: int | None = None,
+) -> AppState:
+    """Create + store singleton. HTTP uses threads so check_same_thread=False."""
+    global _state
+    _state = await createAppState(config=config, port=port)
+    return _state
+
+
+def closeState() -> None:
+    """Close DB and clear global."""
+    global _state
+    if _state and _state.db:
+        _state.db.close()
+    _state = None
+    logger.info("Rememble shut down.")
+
+
+def setState(s: AppState) -> None:
+    """Inject state directly (for tests)."""
+    global _state
+    _state = s
+
+
 async def createAppState(
     config: RemembleConfig | None = None,
     port: int | None = None,
-    check_same_thread: bool = True,
+    check_same_thread: bool = False,
 ) -> AppState:
     """Create AppState — loads config, opens DB, initialises embedder."""
     cfg = config or loadConfig()

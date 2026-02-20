@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import logging
-from contextlib import asynccontextmanager
-
 from fastmcp import FastMCP
 
 from rememble.service import (
@@ -23,32 +20,9 @@ from rememble.service import (
     svcResourceStats,
     svcSearchGraph,
 )
-from rememble.state import AppState, createAppState
+from rememble.state import getState
 
-logger = logging.getLogger("rememble")
-
-# Single global state, set during lifespan
-_state: AppState | None = None
-
-
-def _getState() -> AppState:
-    assert _state is not None, "AppState not initialized"
-    return _state
-
-
-@asynccontextmanager
-async def lifespan(server):
-    global _state
-    _state = await createAppState()
-
-    yield {"db": _state.db, "embedder": _state.embedder, "config": _state.config}
-
-    if _state.db:
-        _state.db.close()
-    logger.info("Rememble shut down.")
-
-
-mcp = FastMCP("rememble", lifespan=lifespan)
+mcp = FastMCP("rememble")
 
 
 # ============================================================
@@ -71,7 +45,7 @@ async def remember(
         tags: Comma-separated tags for filtering.
         metadata: Optional JSON string with extra data.
     """
-    return await svcRemember(_getState(), content, source, tags, metadata)
+    return await svcRemember(getState(), content, source, tags, metadata)
 
 
 @mcp.tool
@@ -87,7 +61,7 @@ async def recall(
         limit: Max results to return.
         use_rag: If True, returns token-budgeted RAG context. If False, raw search results.
     """
-    return await svcRecall(_getState(), query, limit, use_rag)
+    return await svcRecall(getState(), query, limit, use_rag)
 
 
 @mcp.tool
@@ -97,7 +71,7 @@ async def forget(memory_id: int) -> dict:
     Args:
         memory_id: The ID of the memory to forget.
     """
-    return await svcForget(_getState(), memory_id)
+    return await svcForget(getState(), memory_id)
 
 
 @mcp.tool
@@ -117,13 +91,13 @@ async def list_memories(
         limit: Max results per page.
         offset: Pagination offset.
     """
-    return await svcListMemories(_getState(), source, tags, status, limit, offset)
+    return await svcListMemories(getState(), source, tags, status, limit, offset)
 
 
 @mcp.tool
 async def memory_stats() -> dict:
     """Get database statistics: memory counts, index sizes, provider info."""
-    return await svcMemoryStats(_getState())
+    return await svcMemoryStats(getState())
 
 
 # ============================================================
@@ -140,7 +114,7 @@ async def create_entities(
     Args:
         entities: List of dicts with keys: name, entity_type, observations (optional).
     """
-    return await svcCreateEntities(_getState(), entities)
+    return await svcCreateEntities(getState(), entities)
 
 
 @mcp.tool
@@ -152,7 +126,7 @@ async def create_relations(
     Args:
         relations: List of dicts with keys: from_name (str), to_name (str), relation_type (str).
     """
-    return await svcCreateRelations(_getState(), relations)
+    return await svcCreateRelations(getState(), relations)
 
 
 @mcp.tool
@@ -168,7 +142,7 @@ async def add_observations(
         observations: List of observation strings.
         source: Optional source of the observations.
     """
-    return await svcAddObservations(_getState(), entity_name, observations, source)
+    return await svcAddObservations(getState(), entity_name, observations, source)
 
 
 @mcp.tool
@@ -179,7 +153,7 @@ async def search_graph(query: str, limit: int = 10) -> dict:
         query: Search text to match against entity names and observations.
         limit: Max entities to return.
     """
-    return await svcSearchGraph(_getState(), query, limit)
+    return await svcSearchGraph(getState(), query, limit)
 
 
 @mcp.tool
@@ -189,7 +163,7 @@ async def delete_entities(names: list[str]) -> dict:
     Args:
         names: List of entity names to delete.
     """
-    return await svcDeleteEntities(_getState(), names)
+    return await svcDeleteEntities(getState(), names)
 
 
 # ============================================================
@@ -200,22 +174,22 @@ async def delete_entities(names: list[str]) -> dict:
 @mcp.resource("memory://stats")
 def resource_stats() -> dict:
     """Current database statistics."""
-    return svcResourceStats(_getState())
+    return svcResourceStats(getState())
 
 
 @mcp.resource("memory://recent")
 def resource_recent() -> list[dict]:
     """20 most recent memories."""
-    return svcResourceRecent(_getState())
+    return svcResourceRecent(getState())
 
 
 @mcp.resource("memory://graph")
 def resource_graph() -> dict:
     """Full entity/relation graph."""
-    return svcResourceGraph(_getState())
+    return svcResourceGraph(getState())
 
 
 @mcp.resource("memory://{memory_id}")
 def resource_memory(memory_id: str) -> dict:
     """Fetch a specific memory by ID."""
-    return svcResourceMemory(_getState(), memory_id)
+    return svcResourceMemory(getState(), memory_id)

@@ -28,7 +28,14 @@ You have persistent memory via MCP tools. Use proactively.
 Tag with project/topic (`source="project:myapp"`) for easy filtering.
 """
 
-_MCP_ENTRY: dict = {"command": "rememble", "args": ["serve", "--mcp"]}
+
+def _mcpSseUrl() -> str:
+    """Return the MCP SSE endpoint URL using configured port."""
+    from rememble.config import loadConfig
+
+    cfg = loadConfig()
+    return f"http://localhost:{cfg.port}/mcp/sse"
+
 
 # (label, api_url, needs_key, [(model_name, dimensions)])
 _PROVIDER_SLUGS: dict[str, int] = {
@@ -342,20 +349,10 @@ def _isDetected(agent_name: str) -> bool:
 def _setupClaudeCode() -> str:
     if not shutil.which("claude"):
         return "skip"
+    url = _mcpSseUrl()
     try:
         result = subprocess.run(
-            [
-                "claude",
-                "mcp",
-                "add",
-                "--scope",
-                "user",
-                "rememble",
-                "--",
-                "rememble",
-                "serve",
-                "--mcp",
-            ],
+            ["claude", "mcp", "add", "--transport", "sse", "--scope", "user", "rememble", url],
             capture_output=True,
             text=True,
             timeout=15,
@@ -376,7 +373,7 @@ def _setupClaudeDesktop() -> str:
     if not app_dir.exists():
         return "skip"
     cfg = app_dir / "claude_desktop_config.json"
-    _mergeJson(cfg, {"mcpServers": {"rememble": _MCP_ENTRY}})
+    _mergeJson(cfg, {"mcpServers": {"rememble": {"url": _mcpSseUrl()}}})
     return "ok:MCP configured"
 
 
@@ -384,8 +381,7 @@ def _setupOpenCode() -> str:
     if not shutil.which("opencode"):
         return "skip"
     cfg = Path.home() / ".config" / "opencode" / "opencode.json"
-    entry = {"type": "local", "command": ["rememble", "serve", "--mcp"]}
-    _mergeJson(cfg, {"mcp": {"rememble": entry}})
+    _mergeJson(cfg, {"mcp": {"rememble": {"url": _mcpSseUrl()}}})
     instructions_path = Path.home() / ".config" / "opencode" / "AGENTS.md"
     added = _appendInstructions(instructions_path)
     suffix = f", instructions added to {instructions_path}" if added else ""
@@ -396,7 +392,8 @@ def _setupCodex() -> str:
     if not shutil.which("codex"):
         return "skip"
     cfg = Path.home() / ".codex" / "config.toml"
-    block = '[mcp_servers.rememble]\ncommand = "rememble"\nargs = ["serve", "--mcp"]'
+    url = _mcpSseUrl()
+    block = f'[mcp_servers.rememble]\nurl = "{url}"'
     _appendToml(cfg, "[mcp_servers.rememble]", block)
     instructions_path = Path.home() / ".codex" / "AGENTS.md"
     added = _appendInstructions(instructions_path)
@@ -409,7 +406,7 @@ def _setupCursor() -> str:
     if not cursor_dir.exists():
         return "skip"
     cfg = cursor_dir / "mcp.json"
-    _mergeJson(cfg, {"mcpServers": {"rememble": _MCP_ENTRY}})
+    _mergeJson(cfg, {"mcpServers": {"rememble": {"url": _mcpSseUrl()}}})
     return "ok:MCP configured"
 
 
@@ -418,7 +415,7 @@ def _setupWindsurf() -> str:
     if not ws_dir.exists():
         return "skip"
     cfg = ws_dir / "mcp_config.json"
-    _mergeJson(cfg, {"mcpServers": {"rememble": _MCP_ENTRY}})
+    _mergeJson(cfg, {"mcpServers": {"rememble": {"url": _mcpSseUrl()}}})
     return "ok:MCP configured"
 
 

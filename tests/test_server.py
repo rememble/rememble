@@ -7,7 +7,6 @@ import sqlite3
 
 import pytest
 
-# Import server module and patch globals for testing
 import rememble.server.mcp as srv
 from rememble.config import RemembleConfig
 from rememble.db import (
@@ -17,7 +16,7 @@ from rememble.db import (
     insertMemory,
     upsertEntity,
 )
-from rememble.state import AppState
+from rememble.state import AppState, setState
 from tests.conftest import FakeEmbedder
 
 # FastMCP wraps decorated functions in FunctionTool/FunctionResource objects.
@@ -40,10 +39,10 @@ _resource_memory = srv.resource_memory.fn
 
 @pytest.fixture
 def server_ctx(config: RemembleConfig, db: sqlite3.Connection, fake_embedder: FakeEmbedder):
-    """Set up server globals for tool testing."""
-    srv._state = AppState(db=db, embedder=fake_embedder, config=config)
+    """Set up shared state for tool testing."""
+    setState(AppState(db=db, embedder=fake_embedder, config=config))
     yield
-    srv._state = None
+    setState(None)  # type: ignore[arg-type]
 
 
 # -- Core Memory Tools --

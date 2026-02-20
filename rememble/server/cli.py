@@ -127,7 +127,7 @@ def _getClient():
     from rememble.client import RemembleClient
 
     cfg = loadConfig()
-    return RemembleClient(f"http://localhost:{cfg.port}")
+    return RemembleClient(f"http://localhost:{cfg.port}/api")
 
 
 @_cli.callback(invoke_without_command=True)
@@ -141,19 +141,11 @@ def _default(ctx: typer.Context) -> None:
 
 @_cli.command()
 def serve(
-    mcp_mode: bool = typer.Option(False, "--mcp", help="Run as MCP stdio server instead of HTTP"),
     daemon: bool = typer.Option(False, "--daemon", "-d", help="Run HTTP server in background"),
     port: int | None = typer.Option(None, "--port", "-p", help="HTTP port (default from config)"),
     format: str = typer.Option("human", "--format", "-f", help="Output format: human|json"),
 ) -> None:
-    """Start the HTTP API server (or MCP stdio with --mcp)."""
-    if mcp_mode:
-        from rememble.server.mcp import mcp
-
-        logging.basicConfig(level=logging.INFO, format="%(name)s | %(message)s")
-        mcp.run(transport="stdio")
-        return
-
+    """Start the combined HTTP server (REST API + MCP SSE)."""
     cfg = loadConfig()
     p = port or cfg.port
 
@@ -174,10 +166,10 @@ def serve(
 
     import uvicorn
 
-    from rememble.server.api import app
+    from rememble.server.app import createApp
 
     logging.basicConfig(level=logging.INFO, format="%(name)s | %(message)s")
-    uvicorn.run(app, host="0.0.0.0", port=p, log_level="info")
+    uvicorn.run(createApp(), host="0.0.0.0", port=p, log_level="info")
 
 
 @_cli.command()

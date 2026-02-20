@@ -13,7 +13,7 @@ class RemembleClient:
     """Sync httpx client wrapping the Rememble HTTP API."""
 
     def __init__(self, base_url: str | None = None, timeout: float = 30.0):
-        url = base_url or f"http://localhost:{DEFAULT_PORT}"
+        url = base_url or f"http://localhost:{DEFAULT_PORT}/api"
         self._client = httpx.Client(base_url=url, timeout=timeout)
 
     # ── lifecycle ─────────────────────────────────────────────
