@@ -118,6 +118,8 @@ _entity_cli = typer.Typer(help="Knowledge graph entity operations.")
 _cli.add_typer(_entity_cli, name="entity")
 _graph_cli = typer.Typer(help="Knowledge graph search.")
 _cli.add_typer(_graph_cli, name="graph")
+_hook_cli = typer.Typer(help="Claude Code hook handlers (invoked by hooks, not for direct use).")
+_cli.add_typer(_hook_cli, name="hook")
 
 _console = Console()
 
@@ -405,6 +407,54 @@ def cli_graph_search(
             _console.print(f"    - {obs}")
         for rel in ent.get("relations", []):
             _console.print(f"    → {rel['type']} → {rel['entity']}")
+
+
+# ── hook subcommands ─────────────────────────────────────────
+
+
+@_hook_cli.command("session-start")
+def hook_session_start() -> None:
+    """SessionStart hook — auto-recall project context."""
+    import sys
+
+    from rememble.hooks import hookSessionStart
+
+    try:
+        data = json.loads(sys.stdin.read())
+    except (json.JSONDecodeError, OSError):
+        return
+    result = hookSessionStart(data)
+    print(json.dumps(result))
+
+
+@_hook_cli.command("prompt-submit")
+def hook_prompt_submit() -> None:
+    """UserPromptSubmit hook — contextual recall by prompt."""
+    import sys
+
+    from rememble.hooks import hookPromptSubmit
+
+    try:
+        data = json.loads(sys.stdin.read())
+    except (json.JSONDecodeError, OSError):
+        return
+    result = hookPromptSubmit(data)
+    print(json.dumps(result))
+
+
+@_hook_cli.command("session-end")
+def hook_session_end() -> None:
+    """SessionEnd hook — intelligent session capture."""
+    import sys
+
+    from rememble.hooks import hookSessionEnd
+
+    try:
+        data = json.loads(sys.stdin.read())
+    except (json.JSONDecodeError, OSError):
+        return
+    result = hookSessionEnd(data)
+    print(json.dumps(result))
 
 
 # ── setup / uninstall / config ───────────────────────────────

@@ -20,12 +20,29 @@ _INSTRUCTIONS = f"""{_MARKER}
 
 You have persistent memory via MCP tools. Use proactively.
 
-- `remember(content, source=..., tags=...)` — store decisions, preferences, patterns, context
-- `recall(query)` — search before starting work; returns ranked context
-- `create_entities` / `add_observations` — structured facts about people, projects, codebases
-- `search_graph(query)` — search the knowledge graph
+### Auto-recall
+Context is auto-injected via hooks, but `recall(query)` yourself when:
+- Starting a new task (search for prior work)
+- Hitting a bug (search for similar past issues)
+- Making architecture decisions (search for prior decisions)
 
-Tag with project/topic (`source="project:myapp"`) for easy filtering.
+### What to remember
+Use `remember(content, source, tags, project)` for:
+- Key decisions and their rationale
+- Bug fixes: what broke, why, how fixed
+- Patterns discovered in the codebase
+- User preferences and conventions expressed during the session
+Tag with `source="project:{{name}}"` for project-specific, omit project for global.
+
+### Knowledge graph
+- `create_entities` for projects, libraries, services, people
+- `add_observations` to accumulate facts about known entities
+- `create_relations` to link entities (uses, depends_on, inspired_by)
+- `search_graph(query)` to traverse structured facts
+
+### Session capture
+Sessions are auto-captured on exit via hooks. Focus on remembering
+insights AS they happen rather than end-of-session summaries.
 """
 
 
@@ -202,6 +219,110 @@ def _removeTomlSection(path: Path, section: str) -> bool:
 
 
 # ============================================================
+# Hook config helpers (Claude Code ~/.claude/settings.json)
+# ============================================================
+
+
+def _isRemembleHookEntry(entry: dict) -> bool:
+    """Check if a hook group entry references rememble."""
+    return any("rememble" in h.get("command", "") for h in entry.get("hooks", []))
+
+
+def _buildHookConfig(rememble_bin: str) -> dict:
+    """Build Claude Code hook config dict using resolved binary path."""
+    return {
+        "SessionStart": [
+            {
+                "matcher": "startup|resume",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": f"{rememble_bin} hook session-start",
+                        "timeout": 10,
+                    }
+                ],
+            }
+        ],
+        "UserPromptSubmit": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": f"{rememble_bin} hook prompt-submit",
+                        "timeout": 5,
+                    }
+                ],
+            }
+        ],
+        "SessionEnd": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": f"{rememble_bin} hook session-end",
+                        "timeout": 120,
+                    }
+                ],
+            }
+        ],
+    }
+
+
+def _mergeHooks(path: Path, hook_config: dict) -> None:
+    """Merge rememble hooks into settings.json, preserving existing hooks from other tools."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existing: dict = {}
+    if path.exists():
+        try:
+            existing = json.loads(path.read_text())
+        except json.JSONDecodeError:
+            existing = {}
+
+    hooks = existing.setdefault("hooks", {})
+    for event, new_entries in hook_config.items():
+        current = hooks.get(event, [])
+        # Remove old rememble entries first (idempotent)
+        current = [e for e in current if not _isRemembleHookEntry(e)]
+        current.extend(new_entries)
+        hooks[event] = current
+
+    path.write_text(json.dumps(existing, indent=2) + "\n")
+
+
+def _removeHooks(path: Path) -> bool:
+    """Remove all rememble hook entries from settings.json. Returns True if changed."""
+    if not path.exists():
+        return False
+    try:
+        data = json.loads(path.read_text())
+    except json.JSONDecodeError:
+        return False
+
+    hooks = data.get("hooks")
+    if not isinstance(hooks, dict):
+        return False
+
+    changed = False
+    for event in list(hooks):
+        entries = hooks[event]
+        if not isinstance(entries, list):
+            continue
+        filtered = [e for e in entries if not _isRemembleHookEntry(e)]
+        if len(filtered) != len(entries):
+            changed = True
+            if filtered:
+                hooks[event] = filtered
+            else:
+                del hooks[event]
+
+    if changed:
+        if not hooks:
+            del data["hooks"]
+        path.write_text(json.dumps(data, indent=2) + "\n")
+    return changed
+
+
+# ============================================================
 # Config wizard
 # ============================================================
 
@@ -210,12 +331,19 @@ def _configWizard(
     provider: str | None = None,
     api_key: str | None = None,
     model: str | None = None,
+    yes: bool = False,
     format: str = "human",
 ) -> dict[str, Any] | None:
     """Config prompts (interactive or non-interactive). Returns changes dict or None on cancel."""
     from rememble.config import CONFIG_PATH, RemembleConfig, loadConfig
 
     config = loadConfig()
+
+    # --yes with no embedding flags → keep existing config, skip wizard
+    if yes and provider is None and api_key is None and model is None:
+        if format == "human":
+            console.print("[dim]Keeping existing embedding config.[/dim]")
+        return {}
 
     # Resolve provider index
     if provider is not None:
@@ -362,10 +490,15 @@ def _setupClaudeCode() -> str:
     except Exception as e:
         return f"error: {e}"
 
+    # Install hooks into ~/.claude/settings.json
+    rememble_bin = shutil.which("rememble") or "rememble"
+    settings_path = Path.home() / ".claude" / "settings.json"
+    _mergeHooks(settings_path, _buildHookConfig(rememble_bin))
+
     instructions_path = Path.home() / ".claude" / "CLAUDE.md"
     added = _appendInstructions(instructions_path)
     suffix = f", instructions added to {instructions_path}" if added else ""
-    return f"ok:MCP configured{suffix}"
+    return f"ok:MCP + hooks configured{suffix}"
 
 
 def _setupClaudeDesktop() -> str:
@@ -373,7 +506,8 @@ def _setupClaudeDesktop() -> str:
     if not app_dir.exists():
         return "skip"
     cfg = app_dir / "claude_desktop_config.json"
-    _mergeJson(cfg, {"mcpServers": {"rememble": {"url": _mcpSseUrl()}}})
+    entry = {"command": "npx", "args": ["-y", "mcp-remote@latest", _mcpSseUrl()]}
+    _mergeJson(cfg, {"mcpServers": {"rememble": entry}})
     return "ok:MCP configured"
 
 
@@ -449,10 +583,14 @@ def _uninstallClaudeCode() -> str:
     except Exception as e:
         return f"error: {e}"
 
+    # Remove hooks from ~/.claude/settings.json
+    settings_path = Path.home() / ".claude" / "settings.json"
+    _removeHooks(settings_path)
+
     instructions_path = Path.home() / ".claude" / "CLAUDE.md"
     removed = _stripInstructions(instructions_path)
     suffix = f", instructions removed from {instructions_path}" if removed else ""
-    return f"ok:MCP removed{suffix}"
+    return f"ok:MCP + hooks removed{suffix}"
 
 
 def _uninstallClaudeDesktop() -> str:
@@ -613,7 +751,9 @@ def runSetup(
         console.print()
         console.rule("Step 1/2 — Embedding", align="left")
 
-    wizard_result = _configWizard(provider=provider, api_key=api_key, model=model, format=format)
+    wizard_result = _configWizard(
+        provider=provider, api_key=api_key, model=model, yes=yes, format=format
+    )
     if wizard_result is None:
         return  # cancelled or error
 
