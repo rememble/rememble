@@ -154,9 +154,7 @@ async def add_observations(
 
 
 @mcp.tool
-async def search_graph(
-    query: str, limit: int = 10, project: str | None = None
-) -> dict:
+async def search_graph(query: str, limit: int = 10, project: str | None = None) -> dict:
     """Search the knowledge graph by entity name or observation content.
 
     Args:

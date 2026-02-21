@@ -173,7 +173,12 @@ async def svcListMemories(
 ) -> dict:
     """Browse memories with optional filters."""
     rows = listMemories(
-        state.db, source=source, tags=tags, status=status, limit=limit, offset=offset,
+        state.db,
+        source=source,
+        tags=tags,
+        status=status,
+        limit=limit,
+        offset=offset,
         project=project,
     )
     return {

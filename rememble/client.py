@@ -61,7 +61,11 @@ class RemembleClient:
     ) -> dict:
         return self._post(
             "/remember",
-            content=content, source=source, tags=tags, metadata=metadata, project=project,
+            content=content,
+            source=source,
+            tags=tags,
+            metadata=metadata,
+            project=project,
         )
 
     def recall(
@@ -71,9 +75,7 @@ class RemembleClient:
         use_rag: bool = True,
         project: str | None = None,
     ) -> dict:
-        return self._post(
-            "/recall", query=query, limit=limit, use_rag=use_rag, project=project
-        )
+        return self._post("/recall", query=query, limit=limit, use_rag=use_rag, project=project)
 
     def forget(self, memory_id: int) -> dict:
         return self._post("/forget", memory_id=memory_id)

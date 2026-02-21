@@ -67,9 +67,7 @@ async def api_list_memories(
     offset: int = Query(0),
     project: str | None = Query(None),
 ):
-    return await svcListMemories(
-        getState(), source, tags, status, limit, offset, project=project
-    )
+    return await svcListMemories(getState(), source, tags, status, limit, offset, project=project)
 
 
 @router.get("/stats")
