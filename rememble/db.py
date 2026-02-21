@@ -131,8 +131,6 @@ def _migrate(db: sqlite3.Connection, dimensions: int) -> bool:
         CREATE INDEX IF NOT EXISTS idx_memories_status ON memories(status);
         CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at);
         CREATE INDEX IF NOT EXISTS idx_memories_accessed ON memories(accessed_at);
-        CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project);
-        CREATE INDEX IF NOT EXISTS idx_entities_project ON entities(project);
     """)
 
     # Meta table for tracking settings across restarts
@@ -142,7 +140,19 @@ def _migrate(db: sqlite3.Connection, dimensions: int) -> bool:
     needs_reembed = False
     cols = {col[1] for col in db.execute("PRAGMA table_info(memories)").fetchall()}
     if "project" not in cols:
-        needs_reembed = _migrateV1ToV2(db)
+        try:
+            needs_reembed = _migrateV1ToV2(db)
+        except Exception:
+            logger.exception("Schema migration v1→v2 failed")
+            raise RuntimeError(
+                "Failed to migrate database to v2 (project namespace). "
+                "Back up and delete ~/.rememble/memory.db to start fresh, "
+                "or check logs for details."
+            ) from None
+
+    # Project indexes — must run AFTER migration adds the column
+    db.execute("CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_entities_project ON entities(project)")
 
     # Entity uniqueness: (name, project) with NULL handling via partial indexes
     db.execute(
