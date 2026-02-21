@@ -133,10 +133,11 @@ def bm25Probe(
     query: str,
     config: SearchConfig,
     limit: int,
+    project: str | None = None,
 ) -> tuple[float, list[SearchResult]]:
     """Run BM25 text search, return (top_normalized_score, results)."""
     candidate_limit = min(limit * 3, 200)
-    results = textSearch(db, query, limit=candidate_limit)
+    results = textSearch(db, query, limit=candidate_limit, project=project)
     top_score = results[0].score if results else 0.0
     return top_score, results
 
@@ -147,11 +148,12 @@ def hybridSearchTextOnly(
     text_results: list[SearchResult],
     config: SearchConfig,
     limit: int | None = None,
+    project: str | None = None,
 ) -> HybridSearchResult:
     """Fuse BM25 + temporal + graph, skip vector lane."""
     effective_limit = limit or config.default_limit
     fused = _fuseResults(db, config, effective_limit, text_results)
-    graph_results = graphSearch(db, query, limit=5)
+    graph_results = graphSearch(db, query, limit=5, project=project)
     return HybridSearchResult(results=fused, graph=graph_results)
 
 
@@ -162,6 +164,7 @@ def hybridSearch(
     config: SearchConfig,
     limit: int | None = None,
     time_range: tuple[int, int] | None = None,
+    project: str | None = None,
 ) -> HybridSearchResult:
     """Run all search lanes, fuse with RRF, return ranked results.
 
@@ -174,10 +177,12 @@ def hybridSearch(
     effective_limit = limit or config.default_limit
     candidate_limit = min(effective_limit * 3, 200)
 
-    text_results = textSearch(db, query, limit=candidate_limit)
-    vector_results = vectorSearch(db, query_embedding, limit=candidate_limit, time_range=time_range)
+    text_results = textSearch(db, query, limit=candidate_limit, project=project)
+    vector_results = vectorSearch(
+        db, query_embedding, limit=candidate_limit, time_range=time_range, project=project
+    )
 
     fused = _fuseResults(db, config, effective_limit, text_results, vector_results)
-    graph_results = graphSearch(db, query, limit=5)
+    graph_results = graphSearch(db, query, limit=5, project=project)
 
     return HybridSearchResult(results=fused, graph=graph_results)

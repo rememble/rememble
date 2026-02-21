@@ -215,3 +215,96 @@ class TestHybridSearch:
         assert result.results[0].memory_id == 1
         # Should have multiple source lanes
         assert len(result.results[0].sources) > 0
+
+
+# -- Project-scoped search --
+
+
+class TestProjectScopedTextSearch:
+    def test_projectFilterIncludesGlobal(self, db: sqlite3.Connection):
+        _insertWithEmbedding(db, "global python tip", [0.1, 0.2, 0.3, 0.4])
+        insertMemory(db, "myapp python tip", [0.5, 0.6, 0.7, 0.8], project="myapp")
+        insertMemory(db, "other python tip", [0.9, 0.1, 0.2, 0.3], project="other")
+
+        results = textSearch(db, "python", limit=10, project="myapp")
+        # Should find global + myapp, not other
+        assert len(results) == 2
+        # Verify we got the right ones by checking global and myapp are included
+        all_content = []
+        for r in results:
+            row = db.execute("SELECT project FROM memories WHERE id = ?", (r.memory_id,)).fetchone()
+            all_content.append(row["project"])
+        assert None in all_content  # global
+        assert "myapp" in all_content
+
+    def test_noProjectSearchesAll(self, db: sqlite3.Connection):
+        _insertWithEmbedding(db, "global python tip", [0.1, 0.2, 0.3, 0.4])
+        insertMemory(db, "myapp python tip", [0.5, 0.6, 0.7, 0.8], project="myapp")
+        insertMemory(db, "other python tip", [0.9, 0.1, 0.2, 0.3], project="other")
+
+        results = textSearch(db, "python", limit=10)
+        assert len(results) == 3
+
+
+class TestProjectScopedVectorSearch:
+    def test_projectFilterIncludesGlobal(self, db: sqlite3.Connection):
+        _insertWithEmbedding(db, "global vec", [1.0, 0.0, 0.0, 0.0])
+        insertMemory(db, "myapp vec", [0.9, 0.1, 0.0, 0.0], project="myapp")
+        insertMemory(db, "other vec", [0.8, 0.2, 0.0, 0.0], project="other")
+
+        results = vectorSearch(db, [1.0, 0.0, 0.0, 0.0], limit=10, project="myapp")
+        projects = set()
+        for r in results:
+            row = db.execute("SELECT project FROM memories WHERE id = ?", (r.memory_id,)).fetchone()
+            projects.add(row["project"])
+        assert None in projects  # global
+        assert "myapp" in projects
+        assert "other" not in projects
+
+    def test_noProjectSearchesAll(self, db: sqlite3.Connection):
+        _insertWithEmbedding(db, "global vec", [1.0, 0.0, 0.0, 0.0])
+        insertMemory(db, "myapp vec", [0.9, 0.1, 0.0, 0.0], project="myapp")
+        insertMemory(db, "other vec", [0.8, 0.2, 0.0, 0.0], project="other")
+
+        results = vectorSearch(db, [1.0, 0.0, 0.0, 0.0], limit=10)
+        assert len(results) == 3
+
+
+class TestProjectScopedGraphSearch:
+    def test_projectFilterIncludesGlobal(self, db: sqlite3.Connection):
+        eid1 = upsertEntity(db, "Python", "language")
+        addObservation(db, eid1, "Global language")
+        eid2 = upsertEntity(db, "MyLib", "library", project="myapp")
+        addObservation(db, eid2, "myapp library")
+        eid3 = upsertEntity(db, "OtherLib", "library", project="other")
+        addObservation(db, eid3, "other library")
+
+        results = graphSearch(db, "lib", limit=10, project="myapp")
+        names = {r.entity.name for r in results}
+        assert "MyLib" in names
+        assert "OtherLib" not in names
+
+    def test_noProjectSearchesAll(self, db: sqlite3.Connection):
+        upsertEntity(db, "A", "test")
+        upsertEntity(db, "B", "test", project="myapp")
+        upsertEntity(db, "C", "test", project="other")
+
+        results = graphSearch(db, "", limit=10)
+        assert len(results) == 3
+
+
+class TestProjectScopedFusion:
+    def test_hybridSearchWithProject(self, db: sqlite3.Connection):
+        _insertWithEmbedding(db, "global machine learning", [1.0, 0.0, 0.0, 0.0])
+        insertMemory(db, "myapp machine learning", [0.9, 0.1, 0.0, 0.0], project="myapp")
+        insertMemory(db, "other machine learning", [0.8, 0.2, 0.0, 0.0], project="other")
+
+        config = SearchConfig()
+        result = hybridSearch(
+            db, "machine learning", [1.0, 0.0, 0.0, 0.0], config, limit=10, project="myapp"
+        )
+        projects = set()
+        for r in result.results:
+            row = db.execute("SELECT project FROM memories WHERE id = ?", (r.memory_id,)).fetchone()
+            projects.add(row["project"])
+        assert "other" not in projects

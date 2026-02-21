@@ -265,6 +265,74 @@ class TestSvcDeleteEntities:
         assert "ToDelete" in result["deleted"]
 
 
+# ── Project scoping ──────────────────────────────────────────
+
+
+class TestSvcProjectScoping:
+    @pytest.mark.asyncio
+    async def test_rememberWithProject(self, state, db):
+        result = await svcRemember(state, "scoped content", project="myapp")
+        assert result["stored"] is True
+        row = getMemory(db, result["memory_ids"][0])
+        assert row["project"] == "myapp"
+
+    @pytest.mark.asyncio
+    async def test_rememberGlobal(self, state, db):
+        result = await svcRemember(state, "global content")
+        row = getMemory(db, result["memory_ids"][0])
+        assert row["project"] is None
+
+    @pytest.mark.asyncio
+    async def test_recallWithProjectIncludesGlobal(self, state, db, fake_embedder):
+        emb = await fake_embedder.embedOne("python")
+        insertMemory(db, "global python", emb)
+        insertMemory(db, "myapp python", emb, project="myapp")
+        insertMemory(db, "other python", emb, project="other")
+
+        result = await svcRecall(state, "python", limit=10, use_rag=False, project="myapp")
+        # Should include global + myapp but not other
+        ids = {r["memory_id"] for r in result["results"]}
+        projects = set()
+        for mid in ids:
+            row = getMemory(db, mid)
+            projects.add(row["project"])
+        assert "other" not in projects
+
+    @pytest.mark.asyncio
+    async def test_listMemoriesWithProject(self, state, db, fake_embedder):
+        emb = await fake_embedder.embedOne("a")
+        insertMemory(db, "global", emb)
+        insertMemory(db, "scoped", emb, project="myapp")
+        insertMemory(db, "other", emb, project="other")
+
+        result = await svcListMemories(state, project="myapp")
+        assert result["count"] == 2
+        projects = {m["project"] for m in result["memories"]}
+        assert projects == {None, "myapp"}
+
+    @pytest.mark.asyncio
+    async def test_createEntitiesWithProject(self, state, db):
+        result = await svcCreateEntities(
+            state, [{"name": "Lib", "entity_type": "library"}], project="myapp"
+        )
+        assert len(result["created"]) == 1
+        row = db.execute("SELECT project FROM entities WHERE id = ?",
+                         (result["created"][0]["entity_id"],)).fetchone()
+        assert row["project"] == "myapp"
+
+    @pytest.mark.asyncio
+    async def test_searchGraphWithProject(self, state, db):
+        upsertEntity(db, "Global", "test")
+        upsertEntity(db, "Scoped", "test", project="myapp")
+        upsertEntity(db, "Other", "test", project="other")
+
+        result = await svcSearchGraph(state, "", limit=10, project="myapp")
+        names = {e["name"] for e in result["entities"]}
+        assert "Global" in names
+        assert "Scoped" in names
+        assert "Other" not in names
+
+
 # ── Resources ────────────────────────────────────────────────
 
 

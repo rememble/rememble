@@ -10,12 +10,14 @@ class RememberRequest(BaseModel):
     source: str | None = None
     tags: str | None = None
     metadata: str | None = None
+    project: str | None = None
 
 
 class RecallRequest(BaseModel):
     query: str
     limit: int = 10
     use_rag: bool = True
+    project: str | None = None
 
 
 class ForgetRequest(BaseModel):
@@ -30,6 +32,7 @@ class EntityInput(BaseModel):
 
 class CreateEntitiesRequest(BaseModel):
     entities: list[EntityInput]
+    project: str | None = None
 
 
 class RelationInput(BaseModel):

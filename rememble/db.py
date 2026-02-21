@@ -12,7 +12,8 @@ from sqlite_vec import serialize_float32
 
 from rememble.config import RemembleConfig
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+VEC_GLOBAL = "_global"  # sentinel for NULL project in vec_memories
 logger = logging.getLogger("rememble")
 
 
@@ -47,13 +48,14 @@ def connect(
 def _migrate(db: sqlite3.Connection, dimensions: int) -> bool:
     """Create tables if they don't exist. Returns True if re-embedding needed."""
     db.executescript("""
-        -- Core memories table
+        -- Core memories table (v2: includes project)
         CREATE TABLE IF NOT EXISTS memories (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             content TEXT NOT NULL,
             source TEXT,
             tags TEXT,
             metadata_json TEXT,
+            project TEXT,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
             accessed_at INTEGER NOT NULL,
@@ -89,11 +91,12 @@ def _migrate(db: sqlite3.Connection, dimensions: int) -> bool:
             VALUES (new.id, new.content, new.source, new.tags);
         END;
 
-        -- Knowledge graph: entities
+        -- Knowledge graph: entities (v2: project column, no UNIQUE on name alone)
         CREATE TABLE IF NOT EXISTS entities (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
             entity_type TEXT NOT NULL,
+            project TEXT,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
         );
@@ -128,15 +131,32 @@ def _migrate(db: sqlite3.Connection, dimensions: int) -> bool:
         CREATE INDEX IF NOT EXISTS idx_memories_status ON memories(status);
         CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at);
         CREATE INDEX IF NOT EXISTS idx_memories_accessed ON memories(accessed_at);
+        CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project);
+        CREATE INDEX IF NOT EXISTS idx_entities_project ON entities(project);
     """)
 
     # Meta table for tracking settings across restarts
     db.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
 
+    # v1 → v2 migration: add project column if missing
+    needs_reembed = False
+    cols = {col[1] for col in db.execute("PRAGMA table_info(memories)").fetchall()}
+    if "project" not in cols:
+        needs_reembed = _migrateV1ToV2(db)
+
+    # Entity uniqueness: (name, project) with NULL handling via partial indexes
+    db.execute(
+        """CREATE UNIQUE INDEX IF NOT EXISTS idx_entities_name_project
+           ON entities(name, project) WHERE project IS NOT NULL"""
+    )
+    db.execute(
+        """CREATE UNIQUE INDEX IF NOT EXISTS idx_entities_name_global
+           ON entities(name) WHERE project IS NULL"""
+    )
+
     # Detect dimension mismatch — vec_memories is locked to the dimension it was created with
     stored = db.execute("SELECT value FROM meta WHERE key = 'vec_dimensions'").fetchone()
     stored_dims = int(stored[0]) if stored else None
-    needs_reembed = False
 
     if stored_dims is not None and stored_dims != dimensions:
         logger.info(
@@ -147,11 +167,12 @@ def _migrate(db: sqlite3.Connection, dimensions: int) -> bool:
         db.execute("DROP TABLE IF EXISTS vec_memories")
         needs_reembed = True
 
-    # sqlite-vec virtual table (can't be in executescript due to extension)
+    # sqlite-vec virtual table with project auxiliary column
     db.execute(f"""
         CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(
             memory_id INTEGER PRIMARY KEY,
             embedding float[{dimensions}],
+            project TEXT,
             created_at INTEGER
         )
     """)
@@ -159,8 +180,48 @@ def _migrate(db: sqlite3.Connection, dimensions: int) -> bool:
         "INSERT OR REPLACE INTO meta (key, value) VALUES ('vec_dimensions', ?)",
         (str(dimensions),),
     )
+    db.execute(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
+        (str(SCHEMA_VERSION),),
+    )
     db.commit()
     return needs_reembed
+
+
+def _migrateV1ToV2(db: sqlite3.Connection) -> bool:
+    """Migrate v1 → v2: add project column, rebuild entities uniqueness."""
+    logger.info("Migrating schema v1 → v2: adding project namespace")
+
+    db.execute("ALTER TABLE memories ADD COLUMN project TEXT")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project)")
+    db.commit()
+
+    # Recreate entities table: drop UNIQUE(name), add project column
+    db.executescript("""
+        PRAGMA foreign_keys=OFF;
+
+        CREATE TABLE entities_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            entity_type TEXT NOT NULL,
+            project TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        INSERT INTO entities_new (id, name, entity_type, project, created_at, updated_at)
+            SELECT id, name, entity_type, NULL, created_at, updated_at FROM entities;
+        DROP TABLE entities;
+        ALTER TABLE entities_new RENAME TO entities;
+
+        PRAGMA foreign_keys=ON;
+    """)
+
+    db.execute("CREATE INDEX IF NOT EXISTS idx_entities_project ON entities(project)")
+
+    # Drop vec_memories — caller recreates with project auxiliary column
+    db.execute("DROP TABLE IF EXISTS vec_memories")
+    db.commit()
+    return True
 
 
 # -- Memory CRUD --
@@ -173,21 +234,23 @@ def insertMemory(
     source: str | None = None,
     tags: str | None = None,
     metadata_json: str | None = None,
+    project: str | None = None,
 ) -> int:
     """Insert a memory + its embedding. Returns memory ID."""
     now = int(time.time() * 1000)
     cursor = db.execute(
-        """INSERT INTO memories (content, source, tags, metadata_json,
+        """INSERT INTO memories (content, source, tags, metadata_json, project,
            created_at, updated_at, accessed_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (content, source, tags, metadata_json, now, now, now),
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (content, source, tags, metadata_json, project, now, now, now),
     )
     memory_id = cursor.lastrowid
     assert memory_id is not None
 
+    vec_project = project or VEC_GLOBAL
     db.execute(
-        "INSERT INTO vec_memories (memory_id, embedding, created_at) VALUES (?, ?, ?)",
-        (memory_id, serialize_float32(embedding), now),
+        "INSERT INTO vec_memories (memory_id, embedding, project, created_at) VALUES (?, ?, ?, ?)",
+        (memory_id, serialize_float32(embedding), vec_project, now),
     )
     db.commit()
     return memory_id
@@ -230,6 +293,7 @@ def listMemories(
     status: str = "active",
     limit: int = 20,
     offset: int = 0,
+    project: str | None = None,
 ) -> list[sqlite3.Row]:
     """List memories with optional filters."""
     conditions = ["status = ?"]
@@ -240,6 +304,9 @@ def listMemories(
     if tags:
         conditions.append("tags LIKE ?")
         params.append(f"%{tags}%")
+    if project is not None:
+        conditions.append("(project = ? OR project IS NULL)")
+        params.append(project)
     where = " AND ".join(conditions)
     params.extend([limit, offset])
     return db.execute(
@@ -271,17 +338,26 @@ def upsertEntity(
     db: sqlite3.Connection,
     name: str,
     entity_type: str,
+    project: str | None = None,
 ) -> int:
-    """Create or get an entity. Returns entity ID."""
+    """Create or get an entity scoped by (name, project). Returns entity ID."""
     now = int(time.time() * 1000)
-    row = db.execute("SELECT id FROM entities WHERE name = ?", (name,)).fetchone()
+    if project is not None:
+        row = db.execute(
+            "SELECT id FROM entities WHERE name = ? AND project = ?", (name, project)
+        ).fetchone()
+    else:
+        row = db.execute(
+            "SELECT id FROM entities WHERE name = ? AND project IS NULL", (name,)
+        ).fetchone()
     if row:
         db.execute("UPDATE entities SET updated_at = ? WHERE id = ?", (now, row["id"]))
         db.commit()
         return row["id"]
     cursor = db.execute(
-        "INSERT INTO entities (name, entity_type, created_at, updated_at) VALUES (?, ?, ?, ?)",
-        (name, entity_type, now, now),
+        """INSERT INTO entities (name, entity_type, project, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?)""",
+        (name, entity_type, project, now, now),
     )
     db.commit()
     assert cursor.lastrowid is not None

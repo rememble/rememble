@@ -31,6 +31,7 @@ async def svcRemember(
     source: str | None = None,
     tags: str | None = None,
     metadata: str | None = None,
+    project: str | None = None,
 ) -> dict:
     """Store a memory. Auto-chunks, embeds, indexes."""
     cfg = state.config
@@ -56,6 +57,7 @@ async def svcRemember(
             source=source,
             tags=tags,
             metadata_json=chunk_meta,
+            project=project,
         )
         ids.append(memory_id)
 
@@ -72,19 +74,24 @@ async def svcRecall(
     query: str,
     limit: int = 10,
     use_rag: bool = True,
+    project: str | None = None,
 ) -> dict:
     """Search memories by semantic similarity. Uses BM25 probe to short-circuit embedding."""
     cfg = state.config
     threshold = cfg.search.bm25_shortcircuit_threshold
 
     # Phase 1: BM25 probe
-    top_score, text_results = bm25Probe(state.db, query, cfg.search, limit)
+    top_score, text_results = bm25Probe(state.db, query, cfg.search, limit, project=project)
 
     if top_score >= threshold and threshold < 1.0:
         # Short-circuit: skip embedding, fuse BM25 + temporal + graph only
-        hybrid = hybridSearchTextOnly(state.db, query, text_results, cfg.search, limit)
+        hybrid = hybridSearchTextOnly(
+            state.db, query, text_results, cfg.search, limit, project=project
+        )
         if use_rag:
-            context = buildContext(state.db, query, [], cfg.search, cfg.rag, precomputed=hybrid)
+            context = buildContext(
+                state.db, query, [], cfg.search, cfg.rag, precomputed=hybrid, project=project
+            )
             return {
                 "query": context.query,
                 "total_tokens": context.total_tokens,
@@ -115,7 +122,9 @@ async def svcRecall(
     query_embedding = await state.embedder.embedOne(query)
 
     if use_rag:
-        context = buildContext(state.db, query, query_embedding, cfg.search, cfg.rag)
+        context = buildContext(
+            state.db, query, query_embedding, cfg.search, cfg.rag, project=project
+        )
         return {
             "query": context.query,
             "total_tokens": context.total_tokens,
@@ -130,7 +139,9 @@ async def svcRecall(
             ],
         }
 
-    result = hybridSearch(state.db, query, query_embedding, cfg.search, limit=limit)
+    result = hybridSearch(
+        state.db, query, query_embedding, cfg.search, limit=limit, project=project
+    )
     return {
         "query": query,
         "results": [r.model_dump() for r in result.results[:limit]],
@@ -158,10 +169,12 @@ async def svcListMemories(
     status: str = "active",
     limit: int = 20,
     offset: int = 0,
+    project: str | None = None,
 ) -> dict:
     """Browse memories with optional filters."""
     rows = listMemories(
-        state.db, source=source, tags=tags, status=status, limit=limit, offset=offset
+        state.db, source=source, tags=tags, status=status, limit=limit, offset=offset,
+        project=project,
     )
     return {
         "memories": [
@@ -170,6 +183,7 @@ async def svcListMemories(
                 "content": r["content"][:200] + "..." if len(r["content"]) > 200 else r["content"],
                 "source": r["source"],
                 "tags": r["tags"],
+                "project": r["project"],
                 "created_at": r["created_at"],
                 "access_count": r["access_count"],
                 "status": r["status"],
@@ -199,11 +213,13 @@ async def svcMemoryStats(state: AppState) -> dict:
 # ── Knowledge Graph ──────────────────────────────────────────
 
 
-async def svcCreateEntities(state: AppState, entities: list[dict]) -> dict:
+async def svcCreateEntities(
+    state: AppState, entities: list[dict], project: str | None = None
+) -> dict:
     """Create entities in the knowledge graph."""
     created: list[dict] = []
     for e in entities:
-        entity_id = upsertEntity(state.db, e["name"], e["entity_type"])
+        entity_id = upsertEntity(state.db, e["name"], e["entity_type"], project=project)
         obs_ids = []
         for obs in e.get("observations", []):
             obs_id = addObservation(state.db, entity_id, obs)
@@ -249,9 +265,11 @@ async def svcAddObservations(
     return {"entity": entity_name, "observations_added": len(added)}
 
 
-async def svcSearchGraph(state: AppState, query: str, limit: int = 10) -> dict:
+async def svcSearchGraph(
+    state: AppState, query: str, limit: int = 10, project: str | None = None
+) -> dict:
     """Search knowledge graph by entity name or observation content."""
-    results = graphSearch(state.db, query, limit=limit)
+    results = graphSearch(state.db, query, limit=limit, project=project)
     return {
         "entities": [
             {
@@ -298,6 +316,7 @@ def svcResourceRecent(state: AppState) -> list[dict]:
             "content": r["content"][:200],
             "source": r["source"],
             "tags": r["tags"],
+            "project": r["project"],
             "created_at": r["created_at"],
         }
         for r in rows
@@ -332,6 +351,7 @@ def svcResourceMemory(state: AppState, memory_id: str) -> dict:
         "content": row["content"],
         "source": row["source"],
         "tags": row["tags"],
+        "project": row["project"],
         "metadata": row["metadata_json"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],

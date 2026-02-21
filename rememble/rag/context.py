@@ -17,6 +17,7 @@ def buildContext(
     search_config: SearchConfig,
     rag_config: RAGConfig,
     precomputed: HybridSearchResult | None = None,
+    project: str | None = None,
 ) -> RAGContext:
     """Build token-budgeted context from hybrid search results.
 
@@ -36,6 +37,7 @@ def buildContext(
             query_embedding,
             search_config,
             limit=rag_config.max_snippets * 3,
+            project=project,
         )
 
     items: list[RAGItem] = []

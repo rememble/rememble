@@ -43,12 +43,14 @@ async def health():
 
 @router.post("/remember")
 async def api_remember(req: RememberRequest):
-    return await svcRemember(getState(), req.content, req.source, req.tags, req.metadata)
+    return await svcRemember(
+        getState(), req.content, req.source, req.tags, req.metadata, project=req.project
+    )
 
 
 @router.post("/recall")
 async def api_recall(req: RecallRequest):
-    return await svcRecall(getState(), req.query, req.limit, req.use_rag)
+    return await svcRecall(getState(), req.query, req.limit, req.use_rag, project=req.project)
 
 
 @router.post("/forget")
@@ -63,8 +65,11 @@ async def api_list_memories(
     status: str = Query("active"),
     limit: int = Query(20),
     offset: int = Query(0),
+    project: str | None = Query(None),
 ):
-    return await svcListMemories(getState(), source, tags, status, limit, offset)
+    return await svcListMemories(
+        getState(), source, tags, status, limit, offset, project=project
+    )
 
 
 @router.get("/stats")
@@ -78,7 +83,7 @@ async def api_stats():
 @router.post("/entities")
 async def api_create_entities(req: CreateEntitiesRequest):
     entities = [e.model_dump() for e in req.entities]
-    return await svcCreateEntities(getState(), entities)
+    return await svcCreateEntities(getState(), entities, project=req.project)
 
 
 @router.post("/relations")
@@ -96,8 +101,9 @@ async def api_add_observations(req: AddObservationsRequest):
 async def api_search_graph(
     query: str = Query(...),
     limit: int = Query(10),
+    project: str | None = Query(None),
 ):
-    return await svcSearchGraph(getState(), query, limit)
+    return await svcSearchGraph(getState(), query, limit, project=project)
 
 
 @router.delete("/entities")

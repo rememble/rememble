@@ -174,3 +174,72 @@ def test_delete_entities(client, api_state):
     r = client.request("DELETE", "/api/entities", json={"names": ["ToDelete"]})
     assert r.status_code == 200
     assert "ToDelete" in r.json()["deleted"]
+
+
+# ── Project scoping ──────────────────────────────────────────
+
+
+def test_remember_withProject(client, api_state):
+    r = client.post("/api/remember", json={"content": "scoped", "project": "myapp"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["stored"] is True
+    from rememble.db import getMemory
+    row = getMemory(api_state.db, data["memory_ids"][0])
+    assert row["project"] == "myapp"
+
+
+def test_recall_withProject(client, api_state):
+    emb = FakeEmbedder(4)._fakeVec("python")
+    insertMemory(api_state.db, "global python", emb)
+    insertMemory(api_state.db, "myapp python", emb, project="myapp")
+    insertMemory(api_state.db, "other python", emb, project="other")
+
+    r = client.post("/api/recall", json={"query": "python", "use_rag": False, "project": "myapp"})
+    assert r.status_code == 200
+    data = r.json()
+    # Should not include 'other' project memories
+    from rememble.db import getMemory
+    for result in data["results"]:
+        row = getMemory(api_state.db, result["memory_id"])
+        assert row["project"] != "other"
+
+
+def test_list_memories_withProject(client, api_state):
+    emb = FakeEmbedder(4)._fakeVec("l")
+    insertMemory(api_state.db, "global", emb)
+    insertMemory(api_state.db, "scoped", emb, project="myapp")
+    insertMemory(api_state.db, "other", emb, project="other")
+
+    r = client.get("/api/memories", params={"project": "myapp"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["count"] == 2
+    projects = {m["project"] for m in data["memories"]}
+    assert projects == {None, "myapp"}
+
+
+def test_create_entities_withProject(client):
+    r = client.post(
+        "/api/entities",
+        json={
+            "entities": [{"name": "Lib", "entity_type": "library"}],
+            "project": "myapp",
+        },
+    )
+    assert r.status_code == 200
+    assert len(r.json()["created"]) == 1
+
+
+def test_search_graph_withProject(client, api_state):
+    from rememble.db import addObservation
+    upsertEntity(api_state.db, "Global", "test")
+    eid = upsertEntity(api_state.db, "Scoped", "test", project="myapp")
+    addObservation(api_state.db, eid, "myapp entity")
+    upsertEntity(api_state.db, "Other", "test", project="other")
+
+    r = client.get("/api/graph", params={"query": "", "project": "myapp"})
+    assert r.status_code == 200
+    names = {e["name"] for e in r.json()["entities"]}
+    assert "Scoped" in names
+    assert "Other" not in names

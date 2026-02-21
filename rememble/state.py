@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from sqlite_vec import serialize_float32
 
 from rememble.config import RemembleConfig, loadConfig
-from rememble.db import connect
+from rememble.db import VEC_GLOBAL, connect
 from rememble.embeddings.base import EmbeddingProvider
 from rememble.embeddings.factory import createProvider
 
@@ -87,7 +87,9 @@ async def createAppState(
 
 async def _reembed(db: sqlite3.Connection, embedder: EmbeddingProvider) -> None:
     """Re-embed all active memories after a dimension change."""
-    rows = db.execute("SELECT id, content FROM memories WHERE status = 'active'").fetchall()
+    rows = db.execute(
+        "SELECT id, content, project FROM memories WHERE status = 'active'"
+    ).fetchall()
     if not rows:
         logger.info("No memories to re-embed")
         return
@@ -100,9 +102,11 @@ async def _reembed(db: sqlite3.Connection, embedder: EmbeddingProvider) -> None:
         texts = [r["content"] for r in batch]
         embeddings = await embedder.embed(texts)
         for row, emb in zip(batch, embeddings, strict=True):
+            vec_project = row["project"] or VEC_GLOBAL
             db.execute(
-                "INSERT INTO vec_memories (memory_id, embedding, created_at) VALUES (?, ?, ?)",
-                (row["id"], serialize_float32(emb), now),
+                """INSERT INTO vec_memories (memory_id, embedding, project, created_at)
+                   VALUES (?, ?, ?, ?)""",
+                (row["id"], serialize_float32(emb), vec_project, now),
             )
     db.commit()
     logger.info("Re-embedded %d memories", len(rows))

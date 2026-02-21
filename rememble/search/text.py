@@ -85,33 +85,30 @@ def textSearch(
     db: sqlite3.Connection,
     query: str,
     limit: int = 20,
+    project: str | None = None,
 ) -> list[SearchResult]:
     """FTS5 BM25 search. Returns results with snippet previews."""
     fts_query = buildFts5Query(query)
 
-    try:
-        rows = db.execute(
-            """SELECT m.id AS memory_id, bm25(fts_memories) AS rank,
+    project_clause = ""
+    project_params: list[str] = []
+    if project is not None:
+        project_clause = " AND (m.project = ? OR m.project IS NULL)"
+        project_params = [project]
+
+    base_sql = f"""SELECT m.id AS memory_id, bm25(fts_memories) AS rank,
                       snippet(fts_memories, 0, '[', ']', '...', 10) AS snippet
                FROM fts_memories
                JOIN memories m ON m.id = fts_memories.rowid
-               WHERE fts_memories MATCH ? AND m.status = 'active'
+               WHERE fts_memories MATCH ? AND m.status = 'active'{project_clause}
                ORDER BY rank ASC
-               LIMIT ?""",
-            (fts_query, limit),
-        ).fetchall()
+               LIMIT ?"""
+
+    try:
+        rows = db.execute(base_sql, (fts_query, *project_params, limit)).fetchall()
     except sqlite3.OperationalError:
         # Fallback to OR query on FTS5 syntax errors
-        rows = db.execute(
-            """SELECT m.id AS memory_id, bm25(fts_memories) AS rank,
-                      snippet(fts_memories, 0, '[', ']', '...', 10) AS snippet
-               FROM fts_memories
-               JOIN memories m ON m.id = fts_memories.rowid
-               WHERE fts_memories MATCH ? AND m.status = 'active'
-               ORDER BY rank ASC
-               LIMIT ?""",
-            (_orQuery(query), limit),
-        ).fetchall()
+        rows = db.execute(base_sql, (_orQuery(query), *project_params, limit)).fetchall()
 
     results = []
     for row in rows:

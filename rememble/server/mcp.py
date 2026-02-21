@@ -36,6 +36,7 @@ async def remember(
     source: str | None = None,
     tags: str | None = None,
     metadata: str | None = None,
+    project: str | None = None,
 ) -> dict:
     """Store a memory. Auto-chunks long text, embeds, and indexes.
 
@@ -44,8 +45,9 @@ async def remember(
         source: Where it came from (e.g., "conversation", "file", "manual").
         tags: Comma-separated tags for filtering.
         metadata: Optional JSON string with extra data.
+        project: Project namespace (None = global memory).
     """
-    return await svcRemember(getState(), content, source, tags, metadata)
+    return await svcRemember(getState(), content, source, tags, metadata, project=project)
 
 
 @mcp.tool
@@ -53,6 +55,7 @@ async def recall(
     query: str,
     limit: int = 10,
     use_rag: bool = True,
+    project: str | None = None,
 ) -> dict:
     """Search memories by semantic similarity. Returns ranked results with context.
 
@@ -60,8 +63,9 @@ async def recall(
         query: Natural language search query.
         limit: Max results to return.
         use_rag: If True, returns token-budgeted RAG context. If False, raw search results.
+        project: Project namespace. When set, returns project-scoped + global results.
     """
-    return await svcRecall(getState(), query, limit, use_rag)
+    return await svcRecall(getState(), query, limit, use_rag, project=project)
 
 
 @mcp.tool
@@ -81,6 +85,7 @@ async def list_memories(
     status: str = "active",
     limit: int = 20,
     offset: int = 0,
+    project: str | None = None,
 ) -> dict:
     """Browse memories with optional filters.
 
@@ -90,8 +95,9 @@ async def list_memories(
         status: Filter by status: "active", "deleted", or "archived".
         limit: Max results per page.
         offset: Pagination offset.
+        project: Project namespace. When set, returns project-scoped + global results.
     """
-    return await svcListMemories(getState(), source, tags, status, limit, offset)
+    return await svcListMemories(getState(), source, tags, status, limit, offset, project=project)
 
 
 @mcp.tool
@@ -108,13 +114,15 @@ async def memory_stats() -> dict:
 @mcp.tool
 async def create_entities(
     entities: list[dict],
+    project: str | None = None,
 ) -> dict:
     """Create entities in the knowledge graph.
 
     Args:
         entities: List of dicts with keys: name, entity_type, observations (optional).
+        project: Project namespace for the entities (None = global).
     """
-    return await svcCreateEntities(getState(), entities)
+    return await svcCreateEntities(getState(), entities, project=project)
 
 
 @mcp.tool
@@ -146,14 +154,17 @@ async def add_observations(
 
 
 @mcp.tool
-async def search_graph(query: str, limit: int = 10) -> dict:
+async def search_graph(
+    query: str, limit: int = 10, project: str | None = None
+) -> dict:
     """Search the knowledge graph by entity name or observation content.
 
     Args:
         query: Search text to match against entity names and observations.
         limit: Max entities to return.
+        project: Project namespace. When set, returns project-scoped + global entities.
     """
-    return await svcSearchGraph(getState(), query, limit)
+    return await svcSearchGraph(getState(), query, limit, project=project)
 
 
 @mcp.tool
