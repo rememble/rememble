@@ -42,7 +42,23 @@ class TestRemember:
         assert result["stored"] is True
         mock.post.assert_called_once_with(
             "/remember",
-            json={"content": "hello", "source": "test", "tags": "t", "metadata": None},
+            json={
+                "content": "hello", "source": "test", "tags": "t",
+                "metadata": None, "project": None,
+            },
+        )
+
+    def test_remember_withProject(self, client):
+        c, mock = client
+        mock.post.return_value = _mockResp({"stored": True, "memory_ids": [1], "chunks": 1})
+        result = c.remember("hello", project="myapp")
+        assert result["stored"] is True
+        mock.post.assert_called_once_with(
+            "/remember",
+            json={
+                "content": "hello", "source": None, "tags": None,
+                "metadata": None, "project": "myapp",
+            },
         )
 
 
@@ -58,6 +74,15 @@ class TestRecall:
         mock.post.return_value = _mockResp({"query": "q", "results": [], "graph": []})
         result = c.recall("q", use_rag=False)
         assert "results" in result
+
+    def test_recall_withProject(self, client):
+        c, mock = client
+        mock.post.return_value = _mockResp({"query": "q", "total_tokens": 10, "items": []})
+        c.recall("q", project="myapp")
+        mock.post.assert_called_once_with(
+            "/recall",
+            json={"query": "q", "limit": 10, "use_rag": True, "project": "myapp"},
+        )
 
 
 class TestForget:
@@ -100,12 +125,32 @@ class TestStats:
         assert c.stats()["total_memories"] == 5
 
 
+class TestListMemoriesProject:
+    def test_list_withProject(self, client):
+        c, mock = client
+        mock.get.return_value = _mockResp({"memories": [], "count": 0, "offset": 0})
+        c.listMemories(project="myapp")
+        mock.get.assert_called_once_with(
+            "/memories",
+            params={"status": "active", "limit": 20, "offset": 0, "project": "myapp"},
+        )
+
+
 class TestGraph:
     def test_createEntities(self, client):
         c, mock = client
         mock.post.return_value = _mockResp({"created": [{"name": "A"}]})
         result = c.createEntities([{"name": "A", "entity_type": "test"}])
         assert len(result["created"]) == 1
+
+    def test_createEntities_withProject(self, client):
+        c, mock = client
+        mock.post.return_value = _mockResp({"created": [{"name": "A"}]})
+        c.createEntities([{"name": "A", "entity_type": "test"}], project="myapp")
+        mock.post.assert_called_once_with(
+            "/entities",
+            json={"entities": [{"name": "A", "entity_type": "test"}], "project": "myapp"},
+        )
 
     def test_createRelations(self, client):
         c, mock = client
@@ -124,6 +169,14 @@ class TestGraph:
         mock.get.return_value = _mockResp({"entities": [{"name": "A"}]})
         result = c.searchGraph("A")
         assert len(result["entities"]) == 1
+
+    def test_searchGraph_withProject(self, client):
+        c, mock = client
+        mock.get.return_value = _mockResp({"entities": []})
+        c.searchGraph("A", project="myapp")
+        mock.get.assert_called_once_with(
+            "/graph", params={"query": "A", "limit": 10, "project": "myapp"}
+        )
 
     def test_deleteEntities(self, client):
         c, mock = client

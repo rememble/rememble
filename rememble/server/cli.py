@@ -1,234 +1,26 @@
-"""Rememble MCP server — memory tools, knowledge graph, and RAG."""
+"""Typer CLI — serve, config, client commands."""
 
 from __future__ import annotations
 
 import contextlib
 import json
 import logging
-from contextlib import asynccontextmanager
 from typing import Any, get_args, get_origin
 
 import typer
-from fastmcp import FastMCP
 from pydantic import BaseModel
 from rich import box
 from rich.console import Console
 from rich.table import Table
 
-from rememble.config import ChunkingConfig, RAGConfig, RemembleConfig, SearchConfig, loadConfig
-from rememble.service import (
-    svcAddObservations,
-    svcCreateEntities,
-    svcCreateRelations,
-    svcDeleteEntities,
-    svcForget,
-    svcListMemories,
-    svcMemoryStats,
-    svcRecall,
-    svcRemember,
-    svcResourceGraph,
-    svcResourceMemory,
-    svcResourceRecent,
-    svcResourceStats,
-    svcSearchGraph,
+from rememble.config import (
+    ChunkingConfig,
+    EmbeddingConfig,
+    RAGConfig,
+    RemembleConfig,
+    SearchConfig,
+    loadConfig,
 )
-from rememble.state import AppState, createAppState
-
-logger = logging.getLogger("rememble")
-
-# Single global state, set during lifespan
-_state: AppState | None = None
-
-
-def _getState() -> AppState:
-    assert _state is not None, "AppState not initialized"
-    return _state
-
-
-@asynccontextmanager
-async def lifespan(server):
-    global _state
-    _state = await createAppState()
-
-    yield {"db": _state.db, "embedder": _state.embedder, "config": _state.config}
-
-    if _state.db:
-        _state.db.close()
-    logger.info("Rememble shut down.")
-
-
-mcp = FastMCP("rememble", lifespan=lifespan)
-
-
-# ============================================================
-# Core Memory Tools
-# ============================================================
-
-
-@mcp.tool
-async def remember(
-    content: str,
-    source: str | None = None,
-    tags: str | None = None,
-    metadata: str | None = None,
-) -> dict:
-    """Store a memory. Auto-chunks long text, embeds, and indexes.
-
-    Args:
-        content: Text content to remember.
-        source: Where it came from (e.g., "conversation", "file", "manual").
-        tags: Comma-separated tags for filtering.
-        metadata: Optional JSON string with extra data.
-    """
-    return await svcRemember(_getState(), content, source, tags, metadata)
-
-
-@mcp.tool
-async def recall(
-    query: str,
-    limit: int = 10,
-    use_rag: bool = True,
-) -> dict:
-    """Search memories by semantic similarity. Returns ranked results with context.
-
-    Args:
-        query: Natural language search query.
-        limit: Max results to return.
-        use_rag: If True, returns token-budgeted RAG context. If False, raw search results.
-    """
-    return await svcRecall(_getState(), query, limit, use_rag)
-
-
-@mcp.tool
-async def forget(memory_id: int) -> dict:
-    """Soft-delete a memory by ID.
-
-    Args:
-        memory_id: The ID of the memory to forget.
-    """
-    return await svcForget(_getState(), memory_id)
-
-
-@mcp.tool
-async def list_memories(
-    source: str | None = None,
-    tags: str | None = None,
-    status: str = "active",
-    limit: int = 20,
-    offset: int = 0,
-) -> dict:
-    """Browse memories with optional filters.
-
-    Args:
-        source: Filter by source (e.g., "conversation").
-        tags: Filter by tag substring.
-        status: Filter by status: "active", "deleted", or "archived".
-        limit: Max results per page.
-        offset: Pagination offset.
-    """
-    return await svcListMemories(_getState(), source, tags, status, limit, offset)
-
-
-@mcp.tool
-async def memory_stats() -> dict:
-    """Get database statistics: memory counts, index sizes, provider info."""
-    return await svcMemoryStats(_getState())
-
-
-# ============================================================
-# Knowledge Graph Tools
-# ============================================================
-
-
-@mcp.tool
-async def create_entities(
-    entities: list[dict],
-) -> dict:
-    """Create entities in the knowledge graph.
-
-    Args:
-        entities: List of dicts with keys: name, entity_type, observations (optional).
-    """
-    return await svcCreateEntities(_getState(), entities)
-
-
-@mcp.tool
-async def create_relations(
-    relations: list[dict],
-) -> dict:
-    """Create relations between entities in the knowledge graph.
-
-    Args:
-        relations: List of dicts with keys: from_name (str), to_name (str), relation_type (str).
-    """
-    return await svcCreateRelations(_getState(), relations)
-
-
-@mcp.tool
-async def add_observations(
-    entity_name: str,
-    observations: list[str],
-    source: str | None = None,
-) -> dict:
-    """Add observations (facts) to an existing entity.
-
-    Args:
-        entity_name: Name of the entity to add observations to.
-        observations: List of observation strings.
-        source: Optional source of the observations.
-    """
-    return await svcAddObservations(_getState(), entity_name, observations, source)
-
-
-@mcp.tool
-async def search_graph(query: str, limit: int = 10) -> dict:
-    """Search the knowledge graph by entity name or observation content.
-
-    Args:
-        query: Search text to match against entity names and observations.
-        limit: Max entities to return.
-    """
-    return await svcSearchGraph(_getState(), query, limit)
-
-
-@mcp.tool
-async def delete_entities(names: list[str]) -> dict:
-    """Delete entities from the knowledge graph (cascades to relations and observations).
-
-    Args:
-        names: List of entity names to delete.
-    """
-    return await svcDeleteEntities(_getState(), names)
-
-
-# ============================================================
-# MCP Resources
-# ============================================================
-
-
-@mcp.resource("memory://stats")
-def resource_stats() -> dict:
-    """Current database statistics."""
-    return svcResourceStats(_getState())
-
-
-@mcp.resource("memory://recent")
-def resource_recent() -> list[dict]:
-    """20 most recent memories."""
-    return svcResourceRecent(_getState())
-
-
-@mcp.resource("memory://graph")
-def resource_graph() -> dict:
-    """Full entity/relation graph."""
-    return svcResourceGraph(_getState())
-
-
-@mcp.resource("memory://{memory_id}")
-def resource_memory(memory_id: str) -> dict:
-    """Fetch a specific memory by ID."""
-    return svcResourceMemory(_getState(), memory_id)
-
 
 # ============================================================
 # Config CLI helpers
@@ -333,6 +125,8 @@ _entity_cli = typer.Typer(help="Knowledge graph entity operations.")
 _cli.add_typer(_entity_cli, name="entity")
 _graph_cli = typer.Typer(help="Knowledge graph search.")
 _cli.add_typer(_graph_cli, name="graph")
+_hook_cli = typer.Typer(help="Claude Code hook handlers (invoked by hooks, not for direct use).")
+_cli.add_typer(_hook_cli, name="hook")
 
 _console = Console()
 
@@ -342,7 +136,7 @@ def _getClient():
     from rememble.client import RemembleClient
 
     cfg = loadConfig()
-    return RemembleClient(f"http://localhost:{cfg.port}")
+    return RemembleClient(f"http://localhost:{cfg.port}/api")
 
 
 @_cli.callback(invoke_without_command=True)
@@ -356,17 +150,11 @@ def _default(ctx: typer.Context) -> None:
 
 @_cli.command()
 def serve(
-    mcp_mode: bool = typer.Option(False, "--mcp", help="Run as MCP stdio server instead of HTTP"),
     daemon: bool = typer.Option(False, "--daemon", "-d", help="Run HTTP server in background"),
     port: int | None = typer.Option(None, "--port", "-p", help="HTTP port (default from config)"),
     format: str = typer.Option("human", "--format", "-f", help="Output format: human|json"),
 ) -> None:
-    """Start the HTTP API server (or MCP stdio with --mcp)."""
-    if mcp_mode:
-        logging.basicConfig(level=logging.INFO, format="%(name)s | %(message)s")
-        mcp.run(transport="stdio")
-        return
-
+    """Start the combined HTTP server (REST API + MCP SSE)."""
     cfg = loadConfig()
     p = port or cfg.port
 
@@ -387,10 +175,10 @@ def serve(
 
     import uvicorn
 
-    from rememble.api import app
+    from rememble.server.app import createApp
 
     logging.basicConfig(level=logging.INFO, format="%(name)s | %(message)s")
-    uvicorn.run(app, host="0.0.0.0", port=p, log_level="info")
+    uvicorn.run(createApp(), host="0.0.0.0", port=p, log_level="info")
 
 
 @_cli.command()
@@ -628,7 +416,55 @@ def cli_graph_search(
             _console.print(f"    → {rel['type']} → {rel['entity']}")
 
 
-# ── setup / uninstall / config (unchanged) ───────────────────
+# ── hook subcommands ─────────────────────────────────────────
+
+
+@_hook_cli.command("session-start")
+def hook_session_start() -> None:
+    """SessionStart hook — auto-recall project context."""
+    import sys
+
+    from rememble.hooks import hookSessionStart
+
+    try:
+        data = json.loads(sys.stdin.read())
+    except (json.JSONDecodeError, OSError):
+        return
+    result = hookSessionStart(data)
+    print(json.dumps(result))
+
+
+@_hook_cli.command("prompt-submit")
+def hook_prompt_submit() -> None:
+    """UserPromptSubmit hook — contextual recall by prompt."""
+    import sys
+
+    from rememble.hooks import hookPromptSubmit
+
+    try:
+        data = json.loads(sys.stdin.read())
+    except (json.JSONDecodeError, OSError):
+        return
+    result = hookPromptSubmit(data)
+    print(json.dumps(result))
+
+
+@_hook_cli.command("session-end")
+def hook_session_end() -> None:
+    """SessionEnd hook — intelligent session capture."""
+    import sys
+
+    from rememble.hooks import hookSessionEnd
+
+    try:
+        data = json.loads(sys.stdin.read())
+    except (json.JSONDecodeError, OSError):
+        return
+    result = hookSessionEnd(data)
+    print(json.dumps(result))
+
+
+# ── setup / uninstall / config ───────────────────────────────
 
 
 @_cli.command()
@@ -684,18 +520,12 @@ def config_list(
     d = cfg.model_dump()
     dd = defaults.model_dump()
 
-    embedding_keys = [
-        "db_path",
-        "embedding_api_url",
-        "embedding_api_key",
-        "embedding_api_model",
-        "embedding_dimensions",
-    ]
-    _renderConfigSection("Embedding", [(k, d[k], dd[k]) for k in embedding_keys])
-
     def _subPairs(cfg_sub: Any, def_sub: Any, model: Any) -> list[tuple[str, Any, Any]]:
         return [(k, getattr(cfg_sub, k), getattr(def_sub, k)) for k in model.model_fields]
 
+    general_keys = ["db_path", "port", "pid_path"]
+    _renderConfigSection("General", [(k, d[k], dd[k]) for k in general_keys])
+    _renderConfigSection("Embedding", _subPairs(cfg.embedding, defaults.embedding, EmbeddingConfig))
     _renderConfigSection("Search", _subPairs(cfg.search, defaults.search, SearchConfig))
     _renderConfigSection("RAG", _subPairs(cfg.rag, defaults.rag, RAGConfig))
     _renderConfigSection("Chunking", _subPairs(cfg.chunking, defaults.chunking, ChunkingConfig))
@@ -782,7 +612,3 @@ def config_set(
 
 def main() -> None:
     _cli()
-
-
-if __name__ == "__main__":
-    main()

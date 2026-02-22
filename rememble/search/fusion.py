@@ -6,7 +6,7 @@ import sqlite3
 
 from rememble.config import SearchConfig
 from rememble.db import updateAccessStats
-from rememble.models import FusedResult, GraphResult
+from rememble.models import FusedResult, GraphResult, SearchResult
 from rememble.search.graph import graphSearch
 from rememble.search.temporal import temporalScore
 from rememble.search.text import textSearch
@@ -24,57 +24,47 @@ class HybridSearchResult:
         self.graph = graph
 
 
-def hybridSearch(
-    db: sqlite3.Connection,
-    query: str,
-    query_embedding: list[float],
-    config: SearchConfig,
-    limit: int | None = None,
-    time_range: tuple[int, int] | None = None,
-) -> HybridSearchResult:
-    """Run all search lanes, fuse with RRF, return ranked results.
+def _temporalScores(
+    db: sqlite3.Connection, ids: set[int], config: SearchConfig
+) -> dict[int, float]:
+    """Compute temporal scores for a set of memory IDs."""
+    if not ids or config.temporal_weight <= 0:
+        return {}
+    placeholders = ",".join("?" for _ in ids)
+    rows = db.execute(
+        f"""SELECT id, created_at, accessed_at, access_count
+            FROM memories WHERE id IN ({placeholders}) AND status = 'active'""",
+        list(ids),
+    ).fetchall()
+    return {
+        row["id"]: temporalScore(
+            row["created_at"],
+            row["accessed_at"],
+            row["access_count"],
+            config.recency_half_life_days,
+        )
+        for row in rows
+    }
 
-    Lanes:
-    1. BM25 text search (weight: bm25_weight)
-    2. Vector KNN search (weight: vector_weight)
-    3. Temporal scoring (weight: temporal_weight) — applied to candidates from lanes 1+2
-    4. Knowledge graph — entities appended as graph-sourced results
+
+def _fuseResults(
+    db: sqlite3.Connection,
+    config: SearchConfig,
+    effective_limit: int,
+    text_results: list[SearchResult],
+    vector_results: list[SearchResult] | None = None,
+) -> list[FusedResult]:
+    """RRF accumulation + content fetch for fused lanes.
+
+    vector_results=None → text-only fusion (BM25 + temporal).
     """
-    effective_limit = limit or config.default_limit
-    candidate_limit = min(effective_limit * 3, 200)
     k = config.rrf_k
 
-    # Lane 1: BM25
-    text_results = textSearch(db, query, limit=candidate_limit)
+    all_ids: set[int] = {r.memory_id for r in text_results}
+    if vector_results:
+        all_ids |= {r.memory_id for r in vector_results}
 
-    # Lane 2: Vector
-    vector_results = vectorSearch(db, query_embedding, limit=candidate_limit, time_range=time_range)
-
-    # Collect all candidate memory IDs
-    all_ids: set[int] = set()
-    for r in text_results:
-        all_ids.add(r.memory_id)
-    for r in vector_results:
-        all_ids.add(r.memory_id)
-
-    # Lane 3: Temporal scoring for all candidates
-    temporal_scores: dict[int, float] = {}
-    if all_ids and config.temporal_weight > 0:
-        placeholders = ",".join("?" for _ in all_ids)
-        rows = db.execute(
-            f"""SELECT id, created_at, accessed_at, access_count
-                FROM memories WHERE id IN ({placeholders}) AND status = 'active'""",
-            list(all_ids),
-        ).fetchall()
-        for row in rows:
-            temporal_scores[row["id"]] = temporalScore(
-                row["created_at"],
-                row["accessed_at"],
-                row["access_count"],
-                config.recency_half_life_days,
-            )
-
-    # Build temporal ranking (sorted by temporal score desc)
+    temporal_scores = _temporalScores(db, all_ids, config)
     temporal_ranked = sorted(temporal_scores.items(), key=lambda x: x[1], reverse=True)
 
     # RRF accumulator
@@ -83,7 +73,7 @@ def hybridSearch(
     sources: dict[int, list[str]] = {}
     snippets: dict[int, str | None] = {}
 
-    # Accumulate text lane
+    # Text lane
     for rank, r in enumerate(text_results, 1):
         scores[r.memory_id] = scores.get(r.memory_id, 0) + _rrfScore(rank, config.bm25_weight, k)
         best_rank[r.memory_id] = min(best_rank.get(r.memory_id, rank), rank)
@@ -91,25 +81,26 @@ def hybridSearch(
         if r.snippet:
             snippets[r.memory_id] = r.snippet
 
-    # Accumulate vector lane
-    for rank, r in enumerate(vector_results, 1):
-        scores[r.memory_id] = scores.get(r.memory_id, 0) + _rrfScore(rank, config.vector_weight, k)
-        best_rank[r.memory_id] = min(best_rank.get(r.memory_id, rank), rank)
-        sources.setdefault(r.memory_id, []).append("vector")
+    # Vector lane (optional)
+    if vector_results:
+        for rank, r in enumerate(vector_results, 1):
+            scores[r.memory_id] = scores.get(r.memory_id, 0) + _rrfScore(
+                rank, config.vector_weight, k
+            )
+            best_rank[r.memory_id] = min(best_rank.get(r.memory_id, rank), rank)
+            sources.setdefault(r.memory_id, []).append("vector")
 
-    # Accumulate temporal lane
+    # Temporal lane
     for rank, (mid, _tscore) in enumerate(temporal_ranked, 1):
         scores[mid] = scores.get(mid, 0) + _rrfScore(rank, config.temporal_weight, k)
         best_rank[mid] = min(best_rank.get(mid, rank), rank)
         sources.setdefault(mid, []).append("temporal")
 
-    # Sort: fused score desc → best rank asc → memory ID asc
     ranked = sorted(
         scores.keys(),
         key=lambda mid: (-scores[mid], best_rank.get(mid, 999999), mid),
     )
 
-    # Fetch content for top results
     top_ids = ranked[:effective_limit]
     content_map: dict[int, str] = {}
     if top_ids:
@@ -133,10 +124,65 @@ def hybridSearch(
         for mid in top_ids
     ]
 
-    # Update access stats for returned results
     updateAccessStats(db, top_ids)
+    return results
 
-    # Lane 4: Graph search — separate lane, not fused numerically
-    graph_results = graphSearch(db, query, limit=5)
 
-    return HybridSearchResult(results=results, graph=graph_results)
+def bm25Probe(
+    db: sqlite3.Connection,
+    query: str,
+    config: SearchConfig,
+    limit: int,
+    project: str | None = None,
+) -> tuple[float, list[SearchResult]]:
+    """Run BM25 text search, return (top_normalized_score, results)."""
+    candidate_limit = min(limit * 3, 200)
+    results = textSearch(db, query, limit=candidate_limit, project=project)
+    top_score = results[0].score if results else 0.0
+    return top_score, results
+
+
+def hybridSearchTextOnly(
+    db: sqlite3.Connection,
+    query: str,
+    text_results: list[SearchResult],
+    config: SearchConfig,
+    limit: int | None = None,
+    project: str | None = None,
+) -> HybridSearchResult:
+    """Fuse BM25 + temporal + graph, skip vector lane."""
+    effective_limit = limit or config.default_limit
+    fused = _fuseResults(db, config, effective_limit, text_results)
+    graph_results = graphSearch(db, query, limit=5, project=project)
+    return HybridSearchResult(results=fused, graph=graph_results)
+
+
+def hybridSearch(
+    db: sqlite3.Connection,
+    query: str,
+    query_embedding: list[float],
+    config: SearchConfig,
+    limit: int | None = None,
+    time_range: tuple[int, int] | None = None,
+    project: str | None = None,
+) -> HybridSearchResult:
+    """Run all search lanes, fuse with RRF, return ranked results.
+
+    Lanes:
+    1. BM25 text search (weight: bm25_weight)
+    2. Vector KNN search (weight: vector_weight)
+    3. Temporal scoring (weight: temporal_weight) — applied to candidates from lanes 1+2
+    4. Knowledge graph — entities appended as graph-sourced results
+    """
+    effective_limit = limit or config.default_limit
+    candidate_limit = min(effective_limit * 3, 200)
+
+    text_results = textSearch(db, query, limit=candidate_limit, project=project)
+    vector_results = vectorSearch(
+        db, query_embedding, limit=candidate_limit, time_range=time_range, project=project
+    )
+
+    fused = _fuseResults(db, config, effective_limit, text_results, vector_results)
+    graph_results = graphSearch(db, query, limit=5, project=project)
+
+    return HybridSearchResult(results=fused, graph=graph_results)

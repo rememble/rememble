@@ -7,8 +7,7 @@ import sqlite3
 
 import pytest
 
-# Import server module and patch globals for testing
-import rememble.server as srv
+import rememble.server.mcp as srv
 from rememble.config import RemembleConfig
 from rememble.db import (
     addObservation,
@@ -17,7 +16,7 @@ from rememble.db import (
     insertMemory,
     upsertEntity,
 )
-from rememble.state import AppState
+from rememble.state import AppState, setState
 from tests.conftest import FakeEmbedder
 
 # FastMCP wraps decorated functions in FunctionTool/FunctionResource objects.
@@ -40,10 +39,10 @@ _resource_memory = srv.resource_memory.fn
 
 @pytest.fixture
 def server_ctx(config: RemembleConfig, db: sqlite3.Connection, fake_embedder: FakeEmbedder):
-    """Set up server globals for tool testing."""
-    srv._state = AppState(db=db, embedder=fake_embedder, config=config)
+    """Set up shared state for tool testing."""
+    setState(AppState(db=db, embedder=fake_embedder, config=config))
     yield
-    srv._state = None
+    setState(None)  # type: ignore[arg-type]
 
 
 # -- Core Memory Tools --
@@ -245,6 +244,63 @@ class TestDeleteEntities:
 
         obs = db.execute("SELECT * FROM observations WHERE entity_id = ?", (eid,)).fetchall()
         assert len(obs) == 0
+
+
+# -- Project scoping --
+
+
+class TestProjectScoping:
+    @pytest.mark.asyncio
+    async def test_rememberWithProject(self, server_ctx, db):
+        result = await _remember("scoped", project="myapp")
+        assert result["stored"] is True
+        row = getMemory(db, result["memory_ids"][0])
+        assert row["project"] == "myapp"
+
+    @pytest.mark.asyncio
+    async def test_recallWithProject(self, server_ctx, db, fake_embedder):
+        emb = await fake_embedder.embedOne("python")
+        insertMemory(db, "global python", emb)
+        insertMemory(db, "myapp python", emb, project="myapp")
+
+        result = await _recall("python", limit=10, use_rag=False, project="myapp")
+        ids = {r["memory_id"] for r in result["results"]}
+        projects = set()
+        for mid in ids:
+            row = getMemory(db, mid)
+            projects.add(row["project"])
+        # Should have global + myapp
+        assert None in projects or "myapp" in projects
+
+    @pytest.mark.asyncio
+    async def test_listMemoriesWithProject(self, server_ctx, db, fake_embedder):
+        emb = await fake_embedder.embedOne("a")
+        insertMemory(db, "global", emb)
+        insertMemory(db, "scoped", emb, project="myapp")
+        insertMemory(db, "other", emb, project="other")
+
+        result = await _list_memories(project="myapp")
+        assert result["count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_createEntitiesWithProject(self, server_ctx, db):
+        result = await _create_entities(
+            [{"name": "Lib", "entity_type": "library"}], project="myapp"
+        )
+        row = db.execute("SELECT project FROM entities WHERE id = ?",
+                         (result["created"][0]["entity_id"],)).fetchone()
+        assert row["project"] == "myapp"
+
+    @pytest.mark.asyncio
+    async def test_searchGraphWithProject(self, server_ctx, db):
+        upsertEntity(db, "Global", "test")
+        upsertEntity(db, "Scoped", "test", project="myapp")
+        upsertEntity(db, "Other", "test", project="other")
+
+        result = await _search_graph("", limit=10, project="myapp")
+        names = {e["name"] for e in result["entities"]}
+        assert "Scoped" in names
+        assert "Other" not in names
 
 
 # -- MCP Resources --

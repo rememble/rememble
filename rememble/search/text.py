@@ -7,65 +7,112 @@ import sqlite3
 
 from rememble.models import SearchResult
 
+_FTS5_OPERATORS = {"AND", "OR", "NOT", "NEAR"}
 
-def _sanitizeFtsQuery(query: str) -> str:
-    """Sanitize query for FTS5 MATCH. Quotes tokens, strips special chars."""
-    # Remove FTS5 operators and special characters
-    cleaned = re.sub(r"[^\w\s]", " ", query)
-    tokens = cleaned.split()
-    if not tokens:
+
+def _normalizeBm25(rank: float) -> float:
+    """Map BM25 rank to [0, 1). Monotonic — ranking unchanged."""
+    raw = abs(rank)
+    return raw / (1.0 + raw)
+
+
+def buildFts5Query(query: str) -> str:
+    """Build FTS5 MATCH expression supporting phrases, negation, operator stripping.
+
+    - "exact phrase" → passed through
+    - -term → NOT
+    - AND/OR/NOT/NEAR stripped from bare terms
+    - Bare tokens sanitized and AND-joined
+    """
+    negative: list[str] = []
+
+    # Extract quoted phrases first, then process remaining tokens
+    parts: list[str] = []
+    remaining = query
+    for m in re.finditer(r'"([^"]*)"', query):
+        phrase = m.group(1).strip()
+        if phrase:
+            parts.append(f'"{phrase}"')
+    # Remove quoted parts from remaining
+    remaining = re.sub(r'"[^"]*"', " ", remaining)
+
+    for token in remaining.split():
+        if token.startswith("-") and len(token) > 1:
+            clean = re.sub(r"[^\w]", "", token[1:])
+            if clean and clean.upper() not in _FTS5_OPERATORS:
+                negative.append(f'"{clean}"')
+        else:
+            clean = re.sub(r"[^\w]", "", token)
+            if clean and clean.upper() not in _FTS5_OPERATORS:
+                parts.append(f'"{clean}"')
+
+    if not parts and not negative:
         return '""'
-    # Quote each token and AND-join
-    quoted = [f'"{t}"' for t in tokens if t.strip()]
-    return " ".join(quoted)
+
+    # AND-join positive terms + phrases
+    expr = " ".join(parts) if parts else '""'
+
+    # Chain negation: ((pos) NOT neg1) NOT neg2
+    for neg in negative:
+        expr = f"({expr}) NOT {neg}"
+
+    return expr
 
 
 def _orQuery(query: str) -> str:
     """Build an OR-expanded FTS5 query as fallback."""
-    cleaned = re.sub(r"[^\w\s]", " ", query)
-    tokens = cleaned.split()
-    if not tokens:
+    positive: list[str] = []
+
+    for m in re.finditer(r'"([^"]*)"', query):
+        phrase = m.group(1).strip()
+        if phrase:
+            positive.append(f'"{phrase}"')
+    remaining = re.sub(r'"[^"]*"', " ", query)
+
+    for token in remaining.split():
+        if token.startswith("-"):
+            continue
+        clean = re.sub(r"[^\w]", "", token)
+        if clean and clean.upper() not in _FTS5_OPERATORS:
+            positive.append(f'"{clean}"')
+
+    if not positive:
         return '""'
-    quoted = [f'"{t}"' for t in tokens if t.strip()]
-    return " OR ".join(quoted)
+    return " OR ".join(positive)
 
 
 def textSearch(
     db: sqlite3.Connection,
     query: str,
     limit: int = 20,
+    project: str | None = None,
 ) -> list[SearchResult]:
     """FTS5 BM25 search. Returns results with snippet previews."""
-    fts_query = _sanitizeFtsQuery(query)
+    fts_query = buildFts5Query(query)
+
+    project_clause = ""
+    project_params: list[str] = []
+    if project is not None:
+        project_clause = " AND (m.project = ? OR m.project IS NULL)"
+        project_params = [project]
+
+    base_sql = f"""SELECT m.id AS memory_id, bm25(fts_memories) AS rank,
+                      snippet(fts_memories, 0, '[', ']', '...', 10) AS snippet
+               FROM fts_memories
+               JOIN memories m ON m.id = fts_memories.rowid
+               WHERE fts_memories MATCH ? AND m.status = 'active'{project_clause}
+               ORDER BY rank ASC
+               LIMIT ?"""
 
     try:
-        rows = db.execute(
-            """SELECT m.id AS memory_id, bm25(fts_memories) AS rank,
-                      snippet(fts_memories, 0, '[', ']', '...', 10) AS snippet
-               FROM fts_memories
-               JOIN memories m ON m.id = fts_memories.rowid
-               WHERE fts_memories MATCH ? AND m.status = 'active'
-               ORDER BY rank ASC
-               LIMIT ?""",
-            (fts_query, limit),
-        ).fetchall()
+        rows = db.execute(base_sql, (fts_query, *project_params, limit)).fetchall()
     except sqlite3.OperationalError:
         # Fallback to OR query on FTS5 syntax errors
-        rows = db.execute(
-            """SELECT m.id AS memory_id, bm25(fts_memories) AS rank,
-                      snippet(fts_memories, 0, '[', ']', '...', 10) AS snippet
-               FROM fts_memories
-               JOIN memories m ON m.id = fts_memories.rowid
-               WHERE fts_memories MATCH ? AND m.status = 'active'
-               ORDER BY rank ASC
-               LIMIT ?""",
-            (_orQuery(query), limit),
-        ).fetchall()
+        rows = db.execute(base_sql, (_orQuery(query), *project_params, limit)).fetchall()
 
     results = []
     for row in rows:
-        # BM25 rank is negative (lower = better), flip to positive higher = better
-        score = -row["rank"]
+        score = _normalizeBm25(row["rank"])
         results.append(
             SearchResult(
                 memory_id=row["memory_id"],

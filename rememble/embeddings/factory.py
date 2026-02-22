@@ -13,10 +13,10 @@ logger = logging.getLogger(__name__)
 
 async def createProvider(config: RemembleConfig) -> EmbeddingProvider:
     p = CompatProvider(
-        model=config.embedding_api_model,
-        api_url=config.embedding_api_url,
-        api_key=config.embedding_api_key,
-        dimensions=config.embedding_dimensions,
+        model=config.embedding.model,
+        api_url=config.embedding.api_url,
+        api_key=config.embedding.api_key,
+        dimensions=config.embedding.dimensions,
     )
     # Probe actual dimensions — provider may differ from config
     try:

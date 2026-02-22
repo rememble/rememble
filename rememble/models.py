@@ -11,6 +11,7 @@ class Memory(BaseModel):
     source: str | None = None
     tags: str | None = None
     metadata_json: str | None = None
+    project: str | None = None
     created_at: int
     updated_at: int
     accessed_at: int
@@ -22,6 +23,7 @@ class Entity(BaseModel):
     id: int
     name: str
     entity_type: str
+    project: str | None = None
     created_at: int
     updated_at: int
 

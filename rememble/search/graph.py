@@ -11,6 +11,7 @@ def graphSearch(
     db: sqlite3.Connection,
     query: str,
     limit: int = 10,
+    project: str | None = None,
 ) -> list[GraphResult]:
     """Search knowledge graph by entity name or observation content.
 
@@ -20,21 +21,27 @@ def graphSearch(
     """
     pattern = f"%{query}%"
 
+    project_clause = ""
+    project_params: list[str] = []
+    if project is not None:
+        project_clause = " AND (e.project = ? OR e.project IS NULL)"
+        project_params = [project]
+
     # Find entities matching by name
     entity_rows = db.execute(
-        """SELECT DISTINCT e.* FROM entities e
-           WHERE e.name LIKE ? COLLATE NOCASE
+        f"""SELECT DISTINCT e.* FROM entities e
+           WHERE e.name LIKE ? COLLATE NOCASE{project_clause}
            LIMIT ?""",
-        (pattern, limit),
+        (pattern, *project_params, limit),
     ).fetchall()
 
     # Find entities matching by observation content
     obs_entity_rows = db.execute(
-        """SELECT DISTINCT e.* FROM entities e
+        f"""SELECT DISTINCT e.* FROM entities e
            JOIN observations o ON o.entity_id = e.id
-           WHERE o.content LIKE ? COLLATE NOCASE
+           WHERE o.content LIKE ? COLLATE NOCASE{project_clause}
            LIMIT ?""",
-        (pattern, limit),
+        (pattern, *project_params, limit),
     ).fetchall()
 
     # Deduplicate entities
