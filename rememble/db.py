@@ -40,7 +40,7 @@ def connect(
     sqlite_vec.load(db)
     db.enable_load_extension(False)
 
-    dims = dimensions or config.embedding_dimensions
+    dims = dimensions or config.embedding.dimensions
     needs_reembed = _migrate(db, dims)
     return db, needs_reembed
 

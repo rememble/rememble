@@ -35,7 +35,8 @@ def test_configList_json():
     result = runner.invoke(_cli, ["config", "list", "--format", "json"])
     assert result.exit_code == 0
     data = json.loads(result.output)
-    assert "embedding_api_url" in data
+    assert "embedding" in data
+    assert "api_url" in data["embedding"]
     assert "search" in data
     assert "rag" in data
 
@@ -44,10 +45,10 @@ def test_configList_json():
 
 
 def test_configGet_json():
-    result = runner.invoke(_cli, ["config", "get", "embedding_api_url", "--format", "json"])
+    result = runner.invoke(_cli, ["config", "get", "embedding.api_url", "--format", "json"])
     assert result.exit_code == 0
     data = json.loads(result.output)
-    assert data["key"] == "embedding_api_url"
+    assert data["key"] == "embedding.api_url"
     assert "value" in data
     assert "type" in data
 
@@ -65,18 +66,18 @@ def test_configGet_missing_json():
 
 def test_configSet_json(tmp_path: Path):
     result = runner.invoke(
-        _cli, ["config", "set", "embedding_dimensions", "512", "--format", "json"]
+        _cli, ["config", "set", "embedding.dimensions", "512", "--format", "json"]
     )
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["key"] == "embedding_dimensions"
+    assert data["key"] == "embedding.dimensions"
     assert data["value"] == 512
 
 
 def test_configSet_invalid_json():
     result = runner.invoke(
-        _cli, ["config", "set", "embedding_dimensions", "not_a_number", "--format", "json"]
+        _cli, ["config", "set", "embedding.dimensions", "not_a_number", "--format", "json"]
     )
     assert result.exit_code == 1
     data = json.loads(result.output)

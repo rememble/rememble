@@ -101,22 +101,22 @@ Hooks are installed automatically by `rememble setup` into `~/.claude/settings.j
 Config: `~/.rememble/config.json` (created by `rememble setup` or on first run).
 
 ```bash
-rememble config list                # show all config
-rememble config get search.rrf_k    # get a value
-rememble config set search.rrf_k 80 # set a value
+rememble config list                       # show all config
+rememble config get embedding.api_url      # get a value
+rememble config set embedding.dimensions 512  # set a value
 ```
 
 All fields support env var overrides with `REMEMBLE_` prefix:
 
 | Key | Env var | Default | Description |
 |-----|---------|---------|-------------|
-| `embedding_api_url` | `REMEMBLE_EMBEDDING_API_URL` | `http://localhost:11434/v1` | Embedding API endpoint |
-| `embedding_api_key` | `REMEMBLE_EMBEDDING_API_KEY` | — | API key |
-| `embedding_api_model` | `REMEMBLE_EMBEDDING_API_MODEL` | `nomic-embed-text` | Model name |
-| `embedding_dimensions` | `REMEMBLE_EMBEDDING_DIMENSIONS` | `768` | Fallback dimensions (auto-detected at startup) |
+| `embedding.api_url` | `REMEMBLE_EMBEDDING_API_URL` | `http://localhost:11434/v1` | Embedding API endpoint |
+| `embedding.api_key` | `REMEMBLE_EMBEDDING_API_KEY` | — | API key |
+| `embedding.model` | `REMEMBLE_EMBEDDING_MODEL` | `nomic-embed-text` | Model name |
+| `embedding.dimensions` | `REMEMBLE_EMBEDDING_DIMENSIONS` | `768` | Fallback dimensions (auto-detected at startup) |
 | `port` | `REMEMBLE_PORT` | `9909` | HTTP server port |
 
-Sub-configs (`search.*`, `rag.*`, `chunking.*`) are available via `rememble config list`.
+Sub-configs (`search.*`, `rag.*`, `chunking.*`, `embedding.*`) are available via `rememble config list`.
 
 ## Embedding Providers
 

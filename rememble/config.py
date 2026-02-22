@@ -36,17 +36,24 @@ class ChunkingConfig(BaseModel):
     markdown_aware: bool = True
 
 
+class EmbeddingConfig(BaseSettings):
+    model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(
+        env_prefix="REMEMBLE_EMBEDDING_",
+        extra="ignore",
+    )
+    api_url: str = "http://localhost:11434/v1"
+    api_key: str | None = None
+    model: str = "nomic-embed-text"
+    dimensions: int = 768
+
+
 class RemembleConfig(BaseSettings):
     model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(
         env_prefix="REMEMBLE_",
         extra="ignore",
     )
     db_path: str = Field(default_factory=lambda: str(CONFIG_DIR / "memory.db"))
-    # Embedding API settings — prefixed so future API types (llm_api_*) stay distinct
-    embedding_api_url: str = "http://localhost:11434/v1"
-    embedding_api_key: str | None = None
-    embedding_api_model: str = "nomic-embed-text"
-    embedding_dimensions: int = 768
+    embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     # HTTP server
     port: int = 9909
     pid_path: str = Field(default_factory=lambda: str(CONFIG_DIR / "rememble.pid"))
@@ -56,10 +63,29 @@ class RemembleConfig(BaseSettings):
     chunking: ChunkingConfig = Field(default_factory=ChunkingConfig)
 
 
+_FLAT_EMBEDDING_KEYS = {
+    "embedding_api_url": "api_url",
+    "embedding_api_key": "api_key",
+    "embedding_api_model": "model",
+    "embedding_dimensions": "dimensions",
+}
+
+
+def _migrateFlatEmbedding(raw: dict) -> dict:
+    """Reshape legacy flat embedding_api_* keys into nested embedding: {...}."""
+    if any(k in raw for k in _FLAT_EMBEDDING_KEYS):
+        nested = raw.setdefault("embedding", {})
+        for old, new in _FLAT_EMBEDDING_KEYS.items():
+            if old in raw:
+                nested.setdefault(new, raw.pop(old))
+    return raw
+
+
 def loadConfig() -> RemembleConfig:
     """Load config from ~/.rememble/config.json with env var overrides."""
     if CONFIG_PATH.exists():
         raw = json.loads(CONFIG_PATH.read_text())
+        raw = _migrateFlatEmbedding(raw)
         return RemembleConfig(**raw)
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     config = RemembleConfig()

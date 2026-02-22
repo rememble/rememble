@@ -13,7 +13,14 @@ from rich import box
 from rich.console import Console
 from rich.table import Table
 
-from rememble.config import ChunkingConfig, RAGConfig, RemembleConfig, SearchConfig, loadConfig
+from rememble.config import (
+    ChunkingConfig,
+    EmbeddingConfig,
+    RAGConfig,
+    RemembleConfig,
+    SearchConfig,
+    loadConfig,
+)
 
 # ============================================================
 # Config CLI helpers
@@ -513,18 +520,12 @@ def config_list(
     d = cfg.model_dump()
     dd = defaults.model_dump()
 
-    embedding_keys = [
-        "db_path",
-        "embedding_api_url",
-        "embedding_api_key",
-        "embedding_api_model",
-        "embedding_dimensions",
-    ]
-    _renderConfigSection("Embedding", [(k, d[k], dd[k]) for k in embedding_keys])
-
     def _subPairs(cfg_sub: Any, def_sub: Any, model: Any) -> list[tuple[str, Any, Any]]:
         return [(k, getattr(cfg_sub, k), getattr(def_sub, k)) for k in model.model_fields]
 
+    general_keys = ["db_path", "port", "pid_path"]
+    _renderConfigSection("General", [(k, d[k], dd[k]) for k in general_keys])
+    _renderConfigSection("Embedding", _subPairs(cfg.embedding, defaults.embedding, EmbeddingConfig))
     _renderConfigSection("Search", _subPairs(cfg.search, defaults.search, SearchConfig))
     _renderConfigSection("RAG", _subPairs(cfg.rag, defaults.rag, RAGConfig))
     _renderConfigSection("Chunking", _subPairs(cfg.chunking, defaults.chunking, ChunkingConfig))

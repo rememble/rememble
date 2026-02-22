@@ -362,7 +362,7 @@ def _configWizard(
         provider_idx: int | None = _PROVIDER_SLUGS[slug]
     else:
         default_provider = next(
-            (i for i, (_, url, _, _) in enumerate(_PROVIDERS) if url == config.embedding_api_url), 0
+            (i for i, (_, url, _, _) in enumerate(_PROVIDERS) if url == config.embedding.api_url), 0
         )
         provider_idx = questionary.select(
             "Select embedding provider:",
@@ -381,9 +381,9 @@ def _configWizard(
     resolved_key: str | None = None
     if needs_key:
         if api_key is not None:
-            resolved_key = api_key if api_key.strip() else config.embedding_api_key
+            resolved_key = api_key if api_key.strip() else config.embedding.api_key
         else:
-            current_key = config.embedding_api_key
+            current_key = config.embedding.api_key
             hint = " (press enter to keep existing)" if current_key else ""
             new_key = questionary.password(f"API key{hint}:").ask()
             if new_key is None:
@@ -412,7 +412,7 @@ def _configWizard(
         selected_model, selected_dims = match
     else:
         default_model = next(
-            (i for i, (m, _) in enumerate(models) if m == config.embedding_api_model), 0
+            (i for i, (m, _) in enumerate(models) if m == config.embedding.model), 0
         )
         model_result: tuple[str, int] | None = questionary.select(
             "Select embedding model:",
@@ -427,13 +427,13 @@ def _configWizard(
         selected_model, selected_dims = model_result
 
     updates: dict[str, Any] = {
-        "embedding_api_url": url,
-        "embedding_api_key": resolved_key,
-        "embedding_api_model": selected_model,
-        "embedding_dimensions": selected_dims,
+        "api_url": url,
+        "api_key": resolved_key,
+        "model": selected_model,
+        "dimensions": selected_dims,
     }
 
-    changed = {k: v for k, v in updates.items() if getattr(config, k) != v}
+    changed = {k: v for k, v in updates.items() if getattr(config.embedding, k) != v}
     if not changed:
         if format == "human":
             console.print("No changes to embedding config.")
@@ -446,7 +446,7 @@ def _configWizard(
             raw = json.loads(CONFIG_PATH.read_text())
         except json.JSONDecodeError:
             raw = {}
-    raw.update(changed)
+    raw.setdefault("embedding", {}).update(changed)
     RemembleConfig(**raw)  # validate before writing
     CONFIG_PATH.write_text(json.dumps(raw, indent=2) + "\n")
     if format == "human":
