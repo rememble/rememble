@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from typer.testing import CliRunner
 
-from rememble.server import _cli
+from rememble.server.cli import _cli
 
 runner = CliRunner()
 
@@ -35,7 +35,8 @@ def test_configList_json():
     result = runner.invoke(_cli, ["config", "list", "--format", "json"])
     assert result.exit_code == 0
     data = json.loads(result.output)
-    assert "embedding_api_url" in data
+    assert "embedding" in data
+    assert "api_url" in data["embedding"]
     assert "search" in data
     assert "rag" in data
 
@@ -44,10 +45,10 @@ def test_configList_json():
 
 
 def test_configGet_json():
-    result = runner.invoke(_cli, ["config", "get", "embedding_api_url", "--format", "json"])
+    result = runner.invoke(_cli, ["config", "get", "embedding.api_url", "--format", "json"])
     assert result.exit_code == 0
     data = json.loads(result.output)
-    assert data["key"] == "embedding_api_url"
+    assert data["key"] == "embedding.api_url"
     assert "value" in data
     assert "type" in data
 
@@ -65,18 +66,18 @@ def test_configGet_missing_json():
 
 def test_configSet_json(tmp_path: Path):
     result = runner.invoke(
-        _cli, ["config", "set", "embedding_dimensions", "512", "--format", "json"]
+        _cli, ["config", "set", "embedding.dimensions", "512", "--format", "json"]
     )
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["key"] == "embedding_dimensions"
+    assert data["key"] == "embedding.dimensions"
     assert data["value"] == 512
 
 
 def test_configSet_invalid_json():
     result = runner.invoke(
-        _cli, ["config", "set", "embedding_dimensions", "not_a_number", "--format", "json"]
+        _cli, ["config", "set", "embedding.dimensions", "not_a_number", "--format", "json"]
     )
     assert result.exit_code == 1
     data = json.loads(result.output)
@@ -165,7 +166,7 @@ def _mockClient(**methods):
 
 def test_cli_remember_json():
     mock = _mockClient(remember={"stored": True, "memory_ids": [1], "chunks": 1, "tokens": 3})
-    with patch("rememble.server._getClient", return_value=mock):
+    with patch("rememble.server.cli._getClient", return_value=mock):
         result = runner.invoke(_cli, ["remember", "hello world", "--format", "json"])
     assert result.exit_code == 0
     data = json.loads(result.output)
@@ -174,7 +175,7 @@ def test_cli_remember_json():
 
 def test_cli_recall_json():
     mock = _mockClient(recall={"query": "q", "total_tokens": 10, "items": []})
-    with patch("rememble.server._getClient", return_value=mock):
+    with patch("rememble.server.cli._getClient", return_value=mock):
         result = runner.invoke(_cli, ["recall", "query", "--format", "json"])
     assert result.exit_code == 0
     data = json.loads(result.output)
@@ -183,7 +184,7 @@ def test_cli_recall_json():
 
 def test_cli_forget_json():
     mock = _mockClient(forget={"forgotten": True, "memory_id": 1})
-    with patch("rememble.server._getClient", return_value=mock):
+    with patch("rememble.server.cli._getClient", return_value=mock):
         result = runner.invoke(_cli, ["forget", "1", "--format", "json"])
     assert result.exit_code == 0
     data = json.loads(result.output)
@@ -192,7 +193,7 @@ def test_cli_forget_json():
 
 def test_cli_list_json():
     mock = _mockClient(listMemories={"memories": [], "count": 0, "offset": 0})
-    with patch("rememble.server._getClient", return_value=mock):
+    with patch("rememble.server.cli._getClient", return_value=mock):
         result = runner.invoke(_cli, ["list", "--format", "json"])
     assert result.exit_code == 0
     data = json.loads(result.output)
@@ -201,7 +202,7 @@ def test_cli_list_json():
 
 def test_cli_stats_json():
     mock = _mockClient(stats={"total_memories": 5})
-    with patch("rememble.server._getClient", return_value=mock):
+    with patch("rememble.server.cli._getClient", return_value=mock):
         result = runner.invoke(_cli, ["stats", "--format", "json"])
     assert result.exit_code == 0
     data = json.loads(result.output)
@@ -210,7 +211,7 @@ def test_cli_stats_json():
 
 def test_cli_entity_create_json():
     mock = _mockClient(createEntities={"created": [{"name": "A", "entity_id": 1}]})
-    with patch("rememble.server._getClient", return_value=mock):
+    with patch("rememble.server.cli._getClient", return_value=mock):
         result = runner.invoke(
             _cli, ["entity", "create", "--name", "A", "--type", "test", "--format", "json"]
         )
@@ -221,7 +222,7 @@ def test_cli_entity_create_json():
 
 def test_cli_graph_search_json():
     mock = _mockClient(searchGraph={"entities": [{"name": "A", "type": "test"}]})
-    with patch("rememble.server._getClient", return_value=mock):
+    with patch("rememble.server.cli._getClient", return_value=mock):
         result = runner.invoke(_cli, ["graph", "search", "A", "--format", "json"])
     assert result.exit_code == 0
     data = json.loads(result.output)
@@ -233,7 +234,7 @@ def test_cli_remember_connectionError():
     mock.__enter__ = MagicMock(return_value=mock)
     mock.__exit__ = MagicMock(return_value=False)
     mock.remember.side_effect = Exception("Connection refused")
-    with patch("rememble.server._getClient", return_value=mock):
+    with patch("rememble.server.cli._getClient", return_value=mock):
         result = runner.invoke(_cli, ["remember", "test", "--format", "json"])
     assert result.exit_code == 1
     data = json.loads(result.output)

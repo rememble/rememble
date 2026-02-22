@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from rememble.config import RemembleConfig
+from rememble.config import EmbeddingConfig, RemembleConfig
 from rememble.embeddings.base import EmbeddingProvider
 from rememble.embeddings.compat import CompatProvider
 
@@ -96,9 +96,11 @@ class TestFactory:
     @pytest.mark.asyncio
     async def test_createProvider(self):
         config = RemembleConfig(
-            embedding_api_url="http://localhost:11434/v1",
-            embedding_api_model="nomic-embed-text",
-            embedding_dimensions=768,
+            embedding=EmbeddingConfig(
+                api_url="http://localhost:11434/v1",
+                model="nomic-embed-text",
+                dimensions=768,
+            ),
         )
         from rememble.embeddings.factory import createProvider
 
@@ -116,10 +118,12 @@ class TestFactory:
     @pytest.mark.asyncio
     async def test_createProviderWithApiKey(self):
         config = RemembleConfig(
-            embedding_api_url="https://openrouter.ai/api/v1",
-            embedding_api_key="sk-test",
-            embedding_api_model="text-embedding-3-small",
-            embedding_dimensions=1536,
+            embedding=EmbeddingConfig(
+                api_url="https://openrouter.ai/api/v1",
+                api_key="sk-test",
+                model="text-embedding-3-small",
+                dimensions=1536,
+            ),
         )
         from rememble.embeddings.factory import createProvider
 

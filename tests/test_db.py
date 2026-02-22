@@ -115,3 +115,48 @@ def test_deleteEntityCascades(db: sqlite3.Connection):
     assert stats["entities"] == 1  # Only "Other" remains
     assert stats["observations"] == 0
     assert stats["relations"] == 0
+
+
+# -- Project scoping --
+
+
+def test_insertMemoryWithProject(db: sqlite3.Connection):
+    mid = insertMemory(db, "scoped", [0.1, 0.2, 0.3, 0.4], project="myapp")
+    row = getMemory(db, mid)
+    assert row["project"] == "myapp"
+
+
+def test_insertMemoryGlobal(db: sqlite3.Connection):
+    mid = insertMemory(db, "global", [0.1, 0.2, 0.3, 0.4])
+    row = getMemory(db, mid)
+    assert row["project"] is None
+
+
+def test_listMemoriesProjectFilter(db: sqlite3.Connection):
+    insertMemory(db, "global mem", [0.1, 0.2, 0.3, 0.4])
+    insertMemory(db, "proj mem", [0.5, 0.6, 0.7, 0.8], project="myapp")
+    insertMemory(db, "other proj", [0.9, 0.1, 0.2, 0.3], project="other")
+
+    # project=myapp → myapp + global
+    rows = listMemories(db, project="myapp")
+    assert len(rows) == 2
+    projects = {r["project"] for r in rows}
+    assert projects == {None, "myapp"}
+
+    # No project filter → everything
+    all_rows = listMemories(db)
+    assert len(all_rows) == 3
+
+
+def test_upsertEntityWithProject(db: sqlite3.Connection):
+    eid1 = upsertEntity(db, "Python", "language")
+    eid2 = upsertEntity(db, "Python", "language", project="myapp")
+    assert eid1 != eid2  # same name, different project → different entities
+
+    # Upsert same (name, project) returns same id
+    eid3 = upsertEntity(db, "Python", "language", project="myapp")
+    assert eid3 == eid2
+
+    # Upsert same (name, None) returns same id
+    eid4 = upsertEntity(db, "Python", "language")
+    assert eid4 == eid1

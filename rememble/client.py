@@ -13,7 +13,7 @@ class RemembleClient:
     """Sync httpx client wrapping the Rememble HTTP API."""
 
     def __init__(self, base_url: str | None = None, timeout: float = 30.0):
-        url = base_url or f"http://localhost:{DEFAULT_PORT}"
+        url = base_url or f"http://localhost:{DEFAULT_PORT}/api"
         self._client = httpx.Client(base_url=url, timeout=timeout)
 
     # ── lifecycle ─────────────────────────────────────────────
@@ -57,11 +57,25 @@ class RemembleClient:
         source: str | None = None,
         tags: str | None = None,
         metadata: str | None = None,
+        project: str | None = None,
     ) -> dict:
-        return self._post("/remember", content=content, source=source, tags=tags, metadata=metadata)
+        return self._post(
+            "/remember",
+            content=content,
+            source=source,
+            tags=tags,
+            metadata=metadata,
+            project=project,
+        )
 
-    def recall(self, query: str, limit: int = 10, use_rag: bool = True) -> dict:
-        return self._post("/recall", query=query, limit=limit, use_rag=use_rag)
+    def recall(
+        self,
+        query: str,
+        limit: int = 10,
+        use_rag: bool = True,
+        project: str | None = None,
+    ) -> dict:
+        return self._post("/recall", query=query, limit=limit, use_rag=use_rag, project=project)
 
     def forget(self, memory_id: int) -> dict:
         return self._post("/forget", memory_id=memory_id)
@@ -73,12 +87,15 @@ class RemembleClient:
         status: str = "active",
         limit: int = 20,
         offset: int = 0,
+        project: str | None = None,
     ) -> dict:
         params: dict[str, Any] = {"status": status, "limit": limit, "offset": offset}
         if source:
             params["source"] = source
         if tags:
             params["tags"] = tags
+        if project:
+            params["project"] = project
         return self._get("/memories", params=params)
 
     def stats(self) -> dict:
@@ -86,8 +103,8 @@ class RemembleClient:
 
     # ── knowledge graph ───────────────────────────────────────
 
-    def createEntities(self, entities: list[dict]) -> dict:
-        return self._post("/entities", entities=entities)
+    def createEntities(self, entities: list[dict], project: str | None = None) -> dict:
+        return self._post("/entities", entities=entities, project=project)
 
     def createRelations(self, relations: list[dict]) -> dict:
         return self._post("/relations", relations=relations)
@@ -99,8 +116,11 @@ class RemembleClient:
             "/observations", entity_name=entity_name, observations=observations, source=source
         )
 
-    def searchGraph(self, query: str, limit: int = 10) -> dict:
-        return self._get("/graph", params={"query": query, "limit": limit})
+    def searchGraph(self, query: str, limit: int = 10, project: str | None = None) -> dict:
+        params: dict[str, Any] = {"query": query, "limit": limit}
+        if project:
+            params["project"] = project
+        return self._get("/graph", params=params)
 
     def deleteEntities(self, names: list[str]) -> dict:
         return self._delete("/entities", names=names)
