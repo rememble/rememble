@@ -12,6 +12,7 @@ SQLite + sqlite-vec + FTS5 backend. Works with any MCP client.
 - **Auto-chunking** — long text split with sliding window overlap
 - **Multiple providers** — Ollama, OpenAI, OpenRouter, Cohere (any OpenAI-compatible API)
 - **Auto-dimension detection** — probes provider at startup, migrates DB automatically on change
+- **Automatic memory capture** — Claude Code hooks for session recall, contextual injection, and transcript summarization
 - **Setup wizard** — auto-detects and configures Claude Code, Claude Desktop, Cursor, Windsurf, OpenCode, Codex
 
 ## Install
@@ -36,6 +37,7 @@ The setup wizard will:
 
 1. **Configure embeddings** — pick a provider (Ollama, OpenAI, OpenRouter, Cohere) and model
 2. **Configure agents** — auto-detect installed AI agents and register rememble as an MCP server
+3. **Install hooks** — (Claude Code only) register session-start, prompt-submit, and session-end hooks
 
 Non-interactive:
 
@@ -77,7 +79,22 @@ rememble forget 42
 rememble entity create --name Python --type language
 rememble graph search "Python"
 rememble stop                       # stop daemon
+rememble hook session-start         # (used by hooks, not direct use)
+rememble hook prompt-submit
+rememble hook session-end
 ```
+
+## Hooks (Claude Code)
+
+When set up with Claude Code, rememble installs three [hooks](https://docs.anthropic.com/en/docs/claude-code/hooks) for automatic memory capture:
+
+| Hook | Event | What it does |
+|------|-------|--------------|
+| `session-start` | Startup / resume | Recalls recent project context and injects it into the session |
+| `prompt-submit` | Each user prompt | Searches memories relevant to the prompt and injects as context (5s timeout, skips trivial inputs) |
+| `session-end` | Session close | Summarizes the transcript via LLM (Haiku), stores global + project-scoped memories |
+
+Hooks are installed automatically by `rememble setup` into `~/.claude/settings.json`. All hooks gracefully degrade — if the rememble server is unreachable, they return empty and Claude Code continues normally.
 
 ## Configuration
 
@@ -97,7 +114,7 @@ All fields support env var overrides with `REMEMBLE_` prefix:
 | `embedding_api_key` | `REMEMBLE_EMBEDDING_API_KEY` | — | API key |
 | `embedding_api_model` | `REMEMBLE_EMBEDDING_API_MODEL` | `nomic-embed-text` | Model name |
 | `embedding_dimensions` | `REMEMBLE_EMBEDDING_DIMENSIONS` | `768` | Fallback dimensions (auto-detected at startup) |
-| `port` | `REMEMBLE_PORT` | `7707` | HTTP server port |
+| `port` | `REMEMBLE_PORT` | `9909` | HTTP server port |
 
 Sub-configs (`search.*`, `rag.*`, `chunking.*`) are available via `rememble config list`.
 
@@ -137,7 +154,7 @@ Dimensions are auto-detected from the provider at startup. If you switch provide
 docker compose up
 ```
 
-Mounts `~/.rememble` as `/data`. Runs the HTTP API server on port 7707.
+Mounts `~/.rememble` as `/data`. Runs the HTTP API server on port 9909.
 
 ## Development
 
