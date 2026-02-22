@@ -2,6 +2,6 @@ services:
   rememble:
     build: .
     ports:
-      - "7707:7707"
+      - "9909:9909"
     volumes:
       - ~/.rememble:/data

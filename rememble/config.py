@@ -48,7 +48,7 @@ class RemembleConfig(BaseSettings):
     embedding_api_model: str = "nomic-embed-text"
     embedding_dimensions: int = 768
     # HTTP server
-    port: int = 7707
+    port: int = 9909
     pid_path: str = Field(default_factory=lambda: str(CONFIG_DIR / "rememble.pid"))
     # Sub-configs
     search: SearchConfig = Field(default_factory=SearchConfig)

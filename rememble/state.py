@@ -16,7 +16,7 @@ from rememble.embeddings.factory import createProvider
 
 logger = logging.getLogger("rememble")
 
-DEFAULT_PORT = 7707
+DEFAULT_PORT = 9909
 
 # ── Singleton ────────────────────────────────────────────────
 

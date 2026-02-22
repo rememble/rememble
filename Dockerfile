@@ -12,6 +12,6 @@ RUN uv sync --no-dev --frozen 2>/dev/null || uv sync --no-dev
 
 ENV REMEMBLE_DB_PATH=/data/memory.db
 
-EXPOSE 7707
+EXPOSE 9909
 
 ENTRYPOINT ["uv", "run", "rememble", "serve"]
