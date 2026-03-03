@@ -13,6 +13,23 @@ CONFIG_DIR = Path.home() / ".rememble"
 CONFIG_PATH = CONFIG_DIR / "config.json"
 
 
+class ActivationConfig(BaseModel):
+    """ACT-R base-level activation parameters."""
+
+    enabled: bool = True
+    decay_exponent: float = 0.5
+    b_mid: float = 0.0
+    b_scale: float = 1.5
+    min_age_seconds: float = 1.0
+    max_history_size: int = 50
+
+
+class NeedAnalysisConfig(BaseModel):
+    """Memory need analysis — decides whether recall is useful."""
+
+    enabled: bool = True
+
+
 class SearchConfig(BaseModel):
     default_limit: int = 10
     rrf_k: int = 60
@@ -61,6 +78,8 @@ class RemembleConfig(BaseSettings):
     search: SearchConfig = Field(default_factory=SearchConfig)
     rag: RAGConfig = Field(default_factory=RAGConfig)
     chunking: ChunkingConfig = Field(default_factory=ChunkingConfig)
+    activation: ActivationConfig = Field(default_factory=ActivationConfig)
+    need_analysis: NeedAnalysisConfig = Field(default_factory=NeedAnalysisConfig)
 
 
 _FLAT_EMBEDDING_KEYS = {

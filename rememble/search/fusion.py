@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 
 from rememble.config import SearchConfig
 from rememble.db import updateAccessStats
 from rememble.models import FusedResult, GraphResult, SearchResult
 from rememble.search.graph import graphSearch
-from rememble.search.temporal import temporalScore
+from rememble.search.temporal import computeActivation, temporalScore
 from rememble.search.text import textSearch
 from rememble.search.vector import vectorSearch
 
@@ -27,24 +28,30 @@ class HybridSearchResult:
 def _temporalScores(
     db: sqlite3.Connection, ids: set[int], config: SearchConfig
 ) -> dict[int, float]:
-    """Compute temporal scores for a set of memory IDs."""
+    """Compute activation scores for a set of memory IDs using ACT-R or legacy fallback."""
     if not ids or config.temporal_weight <= 0:
         return {}
     placeholders = ",".join("?" for _ in ids)
     rows = db.execute(
-        f"""SELECT id, created_at, accessed_at, access_count
+        f"""SELECT id, created_at, accessed_at, access_count, access_history_json
             FROM memories WHERE id IN ({placeholders}) AND status = 'active'""",
         list(ids),
     ).fetchall()
-    return {
-        row["id"]: temporalScore(
-            row["created_at"],
-            row["accessed_at"],
-            row["access_count"],
-            config.recency_half_life_days,
-        )
-        for row in rows
-    }
+    scores: dict[int, float] = {}
+    for row in rows:
+        raw = row["access_history_json"]
+        if raw:
+            history: list[float] = json.loads(raw)
+            scores[row["id"]] = computeActivation(history)
+        else:
+            # Legacy fallback — no history column yet
+            scores[row["id"]] = temporalScore(
+                row["created_at"],
+                row["accessed_at"],
+                row["access_count"],
+                config.recency_half_life_days,
+            )
+    return scores
 
 
 def _fuseResults(

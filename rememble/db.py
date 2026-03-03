@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 import time
@@ -12,7 +13,8 @@ from sqlite_vec import serialize_float32
 
 from rememble.config import RemembleConfig
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+MAX_HISTORY_SIZE = 50
 VEC_GLOBAL = "_global"  # sentinel for NULL project in vec_memories
 logger = logging.getLogger("rememble")
 
@@ -136,9 +138,10 @@ def _migrate(db: sqlite3.Connection, dimensions: int) -> bool:
     # Meta table for tracking settings across restarts
     db.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
 
-    # v1 → v2 migration: add project column if missing
     needs_reembed = False
     cols = {col[1] for col in db.execute("PRAGMA table_info(memories)").fetchall()}
+
+    # v1 → v2 migration: add project column if missing
     if "project" not in cols:
         try:
             needs_reembed = _migrateV1ToV2(db)
@@ -149,6 +152,10 @@ def _migrate(db: sqlite3.Connection, dimensions: int) -> bool:
                 "Back up and delete ~/.rememble/memory.db to start fresh, "
                 "or check logs for details."
             ) from None
+
+    # v2 → v3 migration: add access_history_json
+    if "access_history_json" not in cols:
+        _migrateV2ToV3(db)
 
     # Project indexes — must run AFTER migration adds the column
     db.execute("CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project)")
@@ -234,6 +241,28 @@ def _migrateV1ToV2(db: sqlite3.Connection) -> bool:
     return True
 
 
+def _migrateV2ToV3(db: sqlite3.Connection) -> None:
+    """Migrate v2 → v3: add access_history_json, seed from existing stats."""
+    logger.info("Migrating schema v2 → v3: adding access_history_json")
+    db.execute("ALTER TABLE memories ADD COLUMN access_history_json TEXT")
+
+    rows = db.execute(
+        "SELECT id, created_at, accessed_at, access_count FROM memories"
+    ).fetchall()
+    for row in rows:
+        created_s = row["created_at"] / 1000.0
+        accessed_s = row["accessed_at"] / 1000.0
+        count = max(row["access_count"], 1)
+        from rememble.search.temporal import synthesizeHistory
+
+        history = synthesizeHistory(created_s, accessed_s, count)
+        db.execute(
+            "UPDATE memories SET access_history_json = ? WHERE id = ?",
+            (json.dumps(history), row["id"]),
+        )
+    db.commit()
+
+
 # -- Memory CRUD --
 
 
@@ -283,16 +312,31 @@ def softDeleteMemory(db: sqlite3.Connection, memory_id: int) -> bool:
 
 
 def updateAccessStats(db: sqlite3.Connection, memory_ids: list[int]) -> None:
-    """Bump accessed_at and access_count for recalled memories."""
+    """Bump accessed_at, access_count, and append to access_history_json."""
     if not memory_ids:
         return
-    now = int(time.time() * 1000)
+    now_ms = int(time.time() * 1000)
+    now_s = now_ms / 1000.0
     placeholders = ",".join("?" for _ in memory_ids)
-    db.execute(
-        f"""UPDATE memories SET accessed_at = ?, access_count = access_count + 1
-            WHERE id IN ({placeholders})""",
-        [now, *memory_ids],
-    )
+
+    # Fetch current histories
+    rows = db.execute(
+        f"SELECT id, access_history_json FROM memories WHERE id IN ({placeholders})",
+        list(memory_ids),
+    ).fetchall()
+
+    for row in rows:
+        raw = row["access_history_json"]
+        history: list[float] = json.loads(raw) if raw else []
+        history.append(now_s)
+        # Trim to max size — keep most recent entries
+        if len(history) > MAX_HISTORY_SIZE:
+            history = history[-MAX_HISTORY_SIZE:]
+        db.execute(
+            "UPDATE memories SET accessed_at = ?, access_count = access_count + 1, "
+            "access_history_json = ? WHERE id = ?",
+            (now_ms, json.dumps(history), row["id"]),
+        )
     db.commit()
 
 
