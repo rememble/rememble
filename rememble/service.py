@@ -21,6 +21,7 @@ from rememble.ingest.chunker import chunkText, countTokens
 from rememble.rag.context import buildContext
 from rememble.search.fusion import bm25Probe, hybridSearch, hybridSearchTextOnly
 from rememble.search.graph import graphSearch
+from rememble.search.need import MemoryNeed, analyzeMemoryNeed
 from rememble.state import AppState
 
 # ── Cache configuration ──────────────────────────────────────
@@ -120,6 +121,22 @@ async def svcRecall(
 ) -> dict:
     """Search memories by similarity. Caches results, uses BM25 probe optimization."""
     cfg = state.config
+
+    # Memory need analysis — skip recall if query doesn't warrant it
+    need: MemoryNeed | None = None
+    if cfg.need_analysis.enabled:
+        need = analyzeMemoryNeed(query)
+        if not need.should_recall:
+            return {
+                "query": query,
+                "skipped": True,
+                "need_type": need.need_type,
+                "reasons": need.reasons,
+            }
+        # Adjust limit for broad context queries
+        if need.need_type == "broad_context":
+            limit = max(limit, 20)
+
     threshold = cfg.search.bm25_shortcircuit_threshold
 
     # Check cache first

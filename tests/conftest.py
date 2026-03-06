@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from rememble.config import EmbeddingConfig, RemembleConfig
+from rememble.config import EmbeddingConfig, NeedAnalysisConfig, RemembleConfig
 from rememble.db import connect
 
 
@@ -18,7 +18,11 @@ def tmp_db_path(tmp_path: Path) -> str:
 
 @pytest.fixture
 def config(tmp_db_path: str) -> RemembleConfig:
-    return RemembleConfig(db_path=tmp_db_path, embedding=EmbeddingConfig(dimensions=4))
+    return RemembleConfig(
+        db_path=tmp_db_path,
+        embedding=EmbeddingConfig(dimensions=4),
+        need_analysis=NeedAnalysisConfig(enabled=False),
+    )
 
 
 @pytest.fixture
