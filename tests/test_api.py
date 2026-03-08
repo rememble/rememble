@@ -185,6 +185,7 @@ def test_remember_withProject(client, api_state):
     data = r.json()
     assert data["stored"] is True
     from rememble.db import getMemory
+
     row = getMemory(api_state.db, data["memory_ids"][0])
     assert row["project"] == "myapp"
 
@@ -200,6 +201,7 @@ def test_recall_withProject(client, api_state):
     data = r.json()
     # Should not include 'other' project memories
     from rememble.db import getMemory
+
     for result in data["results"]:
         row = getMemory(api_state.db, result["memory_id"])
         assert row["project"] != "other"
@@ -233,6 +235,7 @@ def test_create_entities_withProject(client):
 
 def test_search_graph_withProject(client, api_state):
     from rememble.db import addObservation
+
     upsertEntity(api_state.db, "Global", "test")
     eid = upsertEntity(api_state.db, "Scoped", "test", project="myapp")
     addObservation(api_state.db, eid, "myapp entity")

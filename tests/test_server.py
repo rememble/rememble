@@ -287,8 +287,9 @@ class TestProjectScoping:
         result = await _create_entities(
             [{"name": "Lib", "entity_type": "library"}], project="myapp"
         )
-        row = db.execute("SELECT project FROM entities WHERE id = ?",
-                         (result["created"][0]["entity_id"],)).fetchone()
+        row = db.execute(
+            "SELECT project FROM entities WHERE id = ?", (result["created"][0]["entity_id"],)
+        ).fetchone()
         assert row["project"] == "myapp"
 
     @pytest.mark.asyncio

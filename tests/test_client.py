@@ -43,8 +43,11 @@ class TestRemember:
         mock.post.assert_called_once_with(
             "/remember",
             json={
-                "content": "hello", "source": "test", "tags": "t",
-                "metadata": None, "project": None,
+                "content": "hello",
+                "source": "test",
+                "tags": "t",
+                "metadata": None,
+                "project": None,
             },
         )
 
@@ -56,8 +59,11 @@ class TestRemember:
         mock.post.assert_called_once_with(
             "/remember",
             json={
-                "content": "hello", "source": None, "tags": None,
-                "metadata": None, "project": "myapp",
+                "content": "hello",
+                "source": None,
+                "tags": None,
+                "metadata": None,
+                "project": "myapp",
             },
         )
 

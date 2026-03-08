@@ -340,6 +340,92 @@ def test_hookSessionEnd_llmFails_fallbackToChunks(tmp_path: Path):
     assert first_call[0][1]["tags"] == "transcript,raw"
 
 
+def test_hookSessionEnd_storesEntities(tmp_path: Path):
+    """Entity extraction: LLM returns entities, hookSessionEnd stores them."""
+    transcript = tmp_path / "transcript.jsonl"
+    entries = []
+    for i in range(10):
+        entries.append(
+            json.dumps(
+                {
+                    "type": "human",
+                    "message": {
+                        "role": "user",
+                        "content": [{"type": "text", "text": f"Question {i} about architecture"}],
+                    },
+                }
+            )
+        )
+        entries.append(
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": f"Answer {i} about patterns"}],
+                    },
+                }
+            )
+        )
+    transcript.write_text("\n".join(entries))
+
+    llm_result = {
+        "global": [{"content": "User prefers camelCase", "tags": "preference"}],
+        "project": [{"content": "Uses SQLite for storage", "tags": "architecture"}],
+        "entities": [
+            {
+                "name": "SQLite",
+                "type": "technology",
+                "observations": ["Embedded database", "Fast"],
+                "scope": "global",
+            },
+            {
+                "name": "TestApp",
+                "type": "project",
+                "observations": ["Uses SQLite for persistence"],
+                "scope": "project",
+            },
+        ],
+    }
+
+    with (
+        patch("rememble.hooks._llmSummarize", return_value=llm_result),
+        patch("rememble.hooks._callApi") as mock_api,
+        patch("rememble.hooks._deriveProject", return_value="testproj"),
+    ):
+        result = hookSessionEnd(
+            {
+                "transcript_path": str(transcript),
+                "session_id": "sess1",
+                "cwd": str(tmp_path),
+            }
+        )
+
+    assert result == {}
+    # Should have stored 2 memories + 2 entities = 4 calls total
+    assert mock_api.call_count == 4
+
+    # Verify memory calls
+    memory_calls = [c for c in mock_api.call_args_list if c[0][0] == "/remember"]
+    assert len(memory_calls) == 2
+
+    # Verify entity calls
+    entity_calls = [c for c in mock_api.call_args_list if c[0][0] == "/entities"]
+    assert len(entity_calls) == 2
+
+    # Check global entity (scope="global" → project=None)
+    global_entity_call = entity_calls[0]
+    assert global_entity_call[0][1]["project"] is None
+    assert global_entity_call[0][1]["entities"][0]["name"] == "SQLite"
+    assert global_entity_call[0][1]["entities"][0]["entity_type"] == "technology"
+
+    # Check project entity (scope="project" → project="testproj")
+    project_entity_call = entity_calls[1]
+    assert project_entity_call[0][1]["project"] == "testproj"
+    assert project_entity_call[0][1]["entities"][0]["name"] == "TestApp"
+    assert project_entity_call[0][1]["entities"][0]["entity_type"] == "project"
+
+
 # ── Hook config helpers (setup.py) ───────────────────────────
 
 

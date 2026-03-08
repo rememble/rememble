@@ -148,11 +148,93 @@ class TestSvcRecall:
         )
         s = AppState(db=db, embedder=spy, config=config)
         emb = await spy.embedOne("unique keyword xylophone")
-        spy.embed_one_calls = 0
         insertMemory(db, "unique keyword xylophone is here", emb, source="test")
+
+        from rememble.service import _recall_cache
+
+        _recall_cache.clear()
+        spy.embed_one_calls = 0
 
         await svcRecall(s, "xylophone", limit=5, use_rag=False)
         assert spy.embed_one_calls == 1
+
+
+class TestSvcRecallCache:
+    @pytest.mark.asyncio
+    async def test_cacheHitSkipsEmbedding(self, config, db):
+        """Second identical recall call must not increment embed_one_calls."""
+        spy = SpyEmbedder(dimensions=4)
+        s = AppState(db=db, embedder=spy, config=config)
+        emb = await spy.embedOne("cached query")
+        insertMemory(db, "cached query result", emb, source="test")
+
+        # Clear cache before test
+        from rememble.service import _recall_cache
+
+        _recall_cache.clear()
+
+        # First call
+        await svcRecall(s, "cached query", limit=5, use_rag=False)
+        first_call_count = spy.embed_one_calls
+
+        # Second call — should hit cache, no new embed
+        await svcRecall(s, "cached query", limit=5, use_rag=False)
+        assert spy.embed_one_calls == first_call_count
+
+    @pytest.mark.asyncio
+    async def test_cacheInvalidatedOnRemember(self, config, db):
+        """Cache invalidated after svcRemember. Third call re-runs search."""
+        spy = SpyEmbedder(dimensions=4)
+        s = AppState(db=db, embedder=spy, config=config)
+        emb = await spy.embedOne("test query")
+        insertMemory(db, "initial content", emb)
+
+        from rememble.service import _recall_cache
+
+        _recall_cache.clear()
+
+        # First recall — cached
+        await svcRecall(s, "test query", limit=5, use_rag=False)
+        first_count = spy.embed_one_calls
+
+        # Store new memory (invalidates cache)
+        await svcRemember(s, "new memory added", project=None)
+
+        # Third call — cache invalidated, must re-embed
+        await svcRecall(s, "test query", limit=5, use_rag=False)
+        assert spy.embed_one_calls > first_count
+
+    @pytest.mark.asyncio
+    async def test_differentProjectsSeparateCaches(self, config, db):
+        """proj_a and proj_b caches are separate. Invalidating one doesn't evict other."""
+        spy = SpyEmbedder(dimensions=4)
+        s = AppState(db=db, embedder=spy, config=config)
+        emb = await spy.embedOne("shared query")
+        insertMemory(db, "proj_a content", emb, project="proj_a")
+        insertMemory(db, "proj_b content", emb, project="proj_b")
+
+        from rememble.service import _recall_cache
+
+        _recall_cache.clear()
+
+        # Populate both caches
+        await svcRecall(s, "shared query", limit=5, use_rag=False, project="proj_a")
+
+        await svcRecall(s, "shared query", limit=5, use_rag=False, project="proj_b")
+        count_after_b = spy.embed_one_calls
+
+        # Invalidate proj_a
+        await svcRemember(s, "new to proj_a", project="proj_a")
+
+        # proj_a cache invalidated
+        await svcRecall(s, "shared query", limit=5, use_rag=False, project="proj_a")
+        count_after_invalidate_a = spy.embed_one_calls
+        assert count_after_invalidate_a > count_after_b
+
+        # proj_b cache still valid
+        count_before_b_recheck = spy.embed_one_calls
+        await svcRecall(s, "shared query", limit=5, use_rag=False, project="proj_b")
+        assert spy.embed_one_calls == count_before_b_recheck
 
 
 class TestSvcForget:
@@ -316,8 +398,9 @@ class TestSvcProjectScoping:
             state, [{"name": "Lib", "entity_type": "library"}], project="myapp"
         )
         assert len(result["created"]) == 1
-        row = db.execute("SELECT project FROM entities WHERE id = ?",
-                         (result["created"][0]["entity_id"],)).fetchone()
+        row = db.execute(
+            "SELECT project FROM entities WHERE id = ?", (result["created"][0]["entity_id"],)
+        ).fetchone()
         assert row["project"] == "myapp"
 
     @pytest.mark.asyncio

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 
 from rememble.db import (
     addObservation,
@@ -22,6 +23,44 @@ from rememble.search.fusion import bm25Probe, hybridSearch, hybridSearchTextOnly
 from rememble.search.graph import graphSearch
 from rememble.state import AppState
 
+# ── Cache configuration ──────────────────────────────────────
+
+_recall_cache: dict[str, tuple[float, dict]] = {}
+_CACHE_TTL = 30.0
+
+
+def _makeRecallCacheKey(query: str, limit: int, use_rag: bool, project: str | None) -> str:
+    """Build cache key with null-byte delimiters to avoid collisions."""
+    return f"{query}\x00{project}\x00{limit}\x00{use_rag}"
+
+
+def _getFromCache(key: str) -> dict | None:
+    """Get cached result if TTL not expired."""
+    if key not in _recall_cache:
+        return None
+    stored_at, result = _recall_cache[key]
+    if time.time() - stored_at > _CACHE_TTL:
+        del _recall_cache[key]
+        return None
+    return result
+
+
+def _setCache(key: str, result: dict) -> None:
+    """Store result with timestamp."""
+    _recall_cache[key] = (time.time(), result)
+
+
+def _invalidateCache(project: str | None) -> None:
+    """Evict all cache entries for a given project (and global entries if project is None)."""
+    keys_to_delete = []
+    project_marker = f"\x00{project}\x00"
+    for key in _recall_cache:
+        if project_marker in key:
+            keys_to_delete.append(key)
+    for key in keys_to_delete:
+        del _recall_cache[key]
+
+
 # ── Core Memory ──────────────────────────────────────────────
 
 
@@ -33,7 +72,7 @@ async def svcRemember(
     metadata: str | None = None,
     project: str | None = None,
 ) -> dict:
-    """Store a memory. Auto-chunks, embeds, indexes."""
+    """Store a memory. Auto-chunks, embeds, indexes. Invalidates recall cache."""
     cfg = state.config
     c = cfg.chunking
     chunks = chunkText(content, c.target_tokens, c.overlap_tokens, c.markdown_aware)
@@ -61,6 +100,9 @@ async def svcRemember(
         )
         ids.append(memory_id)
 
+    # Invalidate cache after storing new memories
+    _invalidateCache(project)
+
     return {
         "stored": True,
         "memory_ids": ids,
@@ -76,9 +118,15 @@ async def svcRecall(
     use_rag: bool = True,
     project: str | None = None,
 ) -> dict:
-    """Search memories by semantic similarity. Uses BM25 probe to short-circuit embedding."""
+    """Search memories by similarity. Caches results, uses BM25 probe optimization."""
     cfg = state.config
     threshold = cfg.search.bm25_shortcircuit_threshold
+
+    # Check cache first
+    cache_key = _makeRecallCacheKey(query, limit, use_rag, project)
+    cached = _getFromCache(cache_key)
+    if cached is not None:
+        return cached
 
     # Phase 1: BM25 probe
     top_score, text_results = bm25Probe(state.db, query, cfg.search, limit, project=project)
@@ -92,7 +140,7 @@ async def svcRecall(
             context = buildContext(
                 state.db, query, [], cfg.search, cfg.rag, precomputed=hybrid, project=project
             )
-            return {
+            result = {
                 "query": context.query,
                 "total_tokens": context.total_tokens,
                 "items": [item.model_dump() for item in context.items],
@@ -105,7 +153,9 @@ async def svcRecall(
                     for e in context.entities
                 ],
             }
-        return {
+            _setCache(cache_key, result)
+            return result
+        result = {
             "query": query,
             "results": [r.model_dump() for r in hybrid.results[:limit]],
             "graph": [
@@ -117,6 +167,8 @@ async def svcRecall(
                 for g in hybrid.graph
             ],
         }
+        _setCache(cache_key, result)
+        return result
 
     # Phase 2: full path (embed + vector + text + temporal + graph)
     query_embedding = await state.embedder.embedOne(query)
@@ -125,7 +177,7 @@ async def svcRecall(
         context = buildContext(
             state.db, query, query_embedding, cfg.search, cfg.rag, project=project
         )
-        return {
+        result = {
             "query": context.query,
             "total_tokens": context.total_tokens,
             "items": [item.model_dump() for item in context.items],
@@ -138,11 +190,13 @@ async def svcRecall(
                 for e in context.entities
             ],
         }
+        _setCache(cache_key, result)
+        return result
 
     result = hybridSearch(
         state.db, query, query_embedding, cfg.search, limit=limit, project=project
     )
-    return {
+    output = {
         "query": query,
         "results": [r.model_dump() for r in result.results[:limit]],
         "graph": [
@@ -154,6 +208,8 @@ async def svcRecall(
             for g in result.graph
         ],
     }
+    _setCache(cache_key, output)
+    return output
 
 
 async def svcForget(state: AppState, memory_id: int) -> dict:

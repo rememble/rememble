@@ -117,18 +117,37 @@ Extract key insights from this coding session. Output valid JSON:
   ],
   "project": [
     {"content": "...", "tags": "architecture,search"}
+  ],
+  "entities": [
+    {
+      "name": "SQLite",
+      "type": "technology",
+      "observations": ["Embedded database"],
+      "scope": "global"
+    },
+    {
+      "name": "MyApp",
+      "type": "project",
+      "observations": ["Uses SQLite"],
+      "scope": "project"
+    }
   ]
 }
 
 Rules:
 - "global" = universal lessons: user preferences, tool conventions, workflow habits
 - "project" = project-specific: architecture decisions, bug fixes, codebase patterns
+- "entities" = named concepts to add to knowledge graph (optional, may be empty)
+  - Types: technology, project, person, concept
+  - Scope: "global" for universal concepts, "project" for codebase-specific
+  - Observations: list of facts or traits (1-2 per entity)
+  - Maximum 10 entities per session
 - Prioritize USER FEEDBACK — corrections, preferences expressed, "always do X", "never do Y"
 - Include: decisions + rationale, bugs fixed (what/why/how), patterns discovered, user preferences
 - Exclude: transient debugging, file contents, routine operations
-- Each item should be self-contained, useful memory (1-3 sentences)
-- Maximum 10 global + 15 project items per session
-- If there are no meaningful insights, output {"global": [], "project": []}"""
+- Each memory item should be self-contained, useful (1-3 sentences)
+- Maximum 10 global + 15 project memory items per session
+- If there are no meaningful insights, output {"global": [], "project": [], "entities": []}"""
 
 
 def _llmSummarize(transcript: str, project: str | None) -> dict | None:
@@ -192,6 +211,36 @@ def _storeMemories(memories: dict, session_id: str, project: str | None) -> None
             )
 
 
+def _storeEntities(entities: list[dict], session_id: str, project: str | None) -> None:
+    """Store parsed LLM entities to knowledge graph via API."""
+    for entity in entities:
+        name = entity.get("name", "").strip()
+        if not name:
+            continue
+
+        entity_type = entity.get("type", "unknown")
+        observations = entity.get("observations", [])
+        scope = entity.get("scope", "global")
+
+        # Determine project scope: "project" scope means project-specific, otherwise None (global)
+        entity_project = project if scope == "project" else None
+
+        _callApi(
+            "/entities",
+            {
+                "entities": [
+                    {
+                        "name": name,
+                        "entity_type": entity_type,
+                        "observations": observations,
+                    }
+                ],
+                "project": entity_project,
+            },
+            timeout=10.0,
+        )
+
+
 def _storeRawChunks(transcript: str, session_id: str, project: str | None) -> None:
     """Fallback: store raw transcript as chunked memories."""
     source = f"session:{session_id}"
@@ -249,7 +298,7 @@ def hookPromptSubmit(data: dict) -> dict:
 
 
 def hookSessionEnd(data: dict) -> dict:
-    """SessionEnd hook: summarize transcript and store memories. Returns hook response."""
+    """SessionEnd hook: summarize and store memories + entities."""
     transcript_path = data.get("transcript_path", "")
     session_id = data.get("session_id", "unknown")
     cwd = data.get("cwd", "")
@@ -266,6 +315,7 @@ def hookSessionEnd(data: dict) -> dict:
     memories = _llmSummarize(transcript, project)
     if memories:
         _storeMemories(memories, session_id, project)
+        _storeEntities(memories.get("entities", []), session_id, project)
     else:
         _storeRawChunks(transcript, session_id, project)
 
